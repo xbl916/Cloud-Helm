@@ -123,11 +123,16 @@ class Agent:
         task = response.json()
         logger.info("Executing task %s: %s", task["id"], task["action"])
         success = True
-        result = error = None
+        result = error = new_docker_id = None
         try:
-            result = self.runtime.execute(
+            execution = self.runtime.execute(
                 task["docker_id"], task["action"], task.get("arguments") or {}
             )
+            if isinstance(execution, dict):
+                result = execution.get("message")
+                new_docker_id = execution.get("docker_id")
+            else:
+                result = execution
         except Exception as exc:  # Docker SDK errors vary by daemon version
             success = False
             error = f"{type(exc).__name__}: {exc}"
@@ -135,7 +140,12 @@ class Agent:
         response = self.client.post(
             f"/agent/tasks/{task['id']}/result",
             headers=self._headers(),
-            json={"success": success, "result": result, "error": error},
+            json={
+                "success": success,
+                "result": result,
+                "error": error,
+                "docker_id": new_docker_id,
+            },
         )
         response.raise_for_status()
 

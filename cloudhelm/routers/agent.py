@@ -176,7 +176,19 @@ def task_result(
         .encode()[: settings.max_task_result_bytes]
         .decode("utf-8", errors="replace")
     )
-    task.status = TaskStatus.success if payload.success else TaskStatus.failed
+    success = payload.success
+    if task.action == "update_image" and success:
+        container = db.get(Container, task.container_id) if task.container_id else None
+        if not container or not payload.docker_id:
+            success = False
+            error = "image update result did not include the replacement container ID"
+        else:
+            arguments = json.loads(task.arguments_json or "{}")
+            container.docker_id = payload.docker_id
+            container.image = str(arguments.get("target_image") or container.image)
+            container.present = True
+            container.updated_at = datetime.now(UTC)
+    task.status = TaskStatus.success if success else TaskStatus.failed
     task.result = result or None
     task.error = error or None
     task.finished_at = datetime.now(UTC)
@@ -185,7 +197,7 @@ def task_result(
         action=f"task.{task.action}.result",
         target_type="container",
         target_id=task.container_id,
-        success=payload.success,
+        success=success,
         detail=(error or result or "completed")[:1000],
     )
     db.commit()

@@ -12,6 +12,7 @@ from cloudhelm.access import (
 )
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
+from cloudhelm.image_reference import validate_tag_change
 from cloudhelm.models import (
     AccessRule,
     AuditLog,
@@ -223,6 +224,7 @@ def get_container(container_id: str, db: Db, user: CurrentUser) -> dict:
         "view": True,
         "logs": can_access(user, rules, node, item, "logs"),
         "operate": can_access(user, rules, node, item, "operate"),
+        "update_image": user.role == UserRole.admin,
     }
     return result
 
@@ -268,9 +270,26 @@ def create_action(
     rules = load_access_rules(db, user)
     if not node or not can_access(user, rules, node, container, "view"):
         raise HTTPException(status_code=404, detail="容器不存在")
-    permission = "logs" if payload.action == "logs" else "operate"
-    if not can_access(user, rules, node, container, permission):
-        raise HTTPException(status_code=403, detail="没有该容器的操作权限")
+    arguments: dict = {}
+    if payload.action == "update_image":
+        if user.role != UserRole.admin:
+            raise HTTPException(status_code=403, detail="更新镜像需要管理员权限")
+        try:
+            _, target_ref = validate_tag_change(
+                container.image, payload.target_image or ""
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        arguments = {
+            "expected_image": container.image,
+            "target_image": target_ref.canonical,
+        }
+    else:
+        permission = "logs" if payload.action == "logs" else "operate"
+        if not can_access(user, rules, node, container, permission):
+            raise HTTPException(status_code=403, detail="没有该容器的操作权限")
+        if payload.action == "logs":
+            arguments = {"tail": payload.tail}
     if not node or not _node_online(node, settings.node_offline_seconds):
         raise HTTPException(status_code=409, detail="节点离线，无法下发操作")
     task = Task(
@@ -278,9 +297,7 @@ def create_action(
         container_id=container.id,
         docker_id=container.docker_id,
         action=payload.action,
-        arguments_json=json.dumps(
-            {"tail": payload.tail} if payload.action == "logs" else {}
-        ),
+        arguments_json=json.dumps(arguments),
         requested_by=user.id,
     )
     db.add(task)
@@ -291,7 +308,11 @@ def create_action(
         target_id=container.id,
         target_name=f"{node.name}/{container.name}",
         user=user,
-        detail="task queued",
+        detail=(
+            f"task queued: {container.image} -> {arguments['target_image']}"
+            if payload.action == "update_image"
+            else "task queued"
+        ),
         request=request,
         settings=settings,
     )

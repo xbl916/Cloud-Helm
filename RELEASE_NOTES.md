@@ -16,6 +16,19 @@
 
 `nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.0 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
 
+## 管理员同仓库换 Tag
+
+- H5 与企业自用小程序新增管理员镜像更新入口，填写新 Tag 后必须再次核对原镜像和目标镜像。
+- Server 与 Agent 双重限制只能更换同一 registry/namespace/repository 的不同 Tag；普通运维角色、digest、同 Tag 和跨仓库替换都会被拒绝。
+- Agent 先拉取镜像，再按原配置重建容器；保留端口、卷、网络、GPU、资源限制、重启策略及 Compose 标签，创建或启动失败时自动恢复旧容器。
+- 替换成功后 Server 延续原容器记录并更新 Docker ID，避免资源授权因容器重建失效。
+- 自动删除、静态 IP 和 Agent 自身容器不允许在线替换；Compose 文件仍需管理员在验证后手工同步新 Tag。
+
+## H5 移动端自适应
+
+- 针对 320–480px 手机视口重新约束总览、节点、GPU、容器详情、用户权限、审计、弹窗和底部操作区。
+- 长镜像名、GPU 型号、时间和权限按钮可换行或收缩，页面根布局不再产生横向滚动。
+
 ## 部署和质量保障
 
 - README 补充企业自用小程序注册、关联、Secret、合法域名、体验版和正式发布流程。

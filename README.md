@@ -26,7 +26,7 @@ Cloud Helm Server
   │ 用户角色 + 资源范围（确认能看什么、能做什么）
   ▼
 Agent 主动轮询 + 每节点独立令牌
-  │ logs / start / stop / restart 白名单
+  │ logs / start / stop / restart / update_image 白名单
   ▼
 Docker Engine
 ```
@@ -38,8 +38,8 @@ Docker Engine
 - OAuth `state` 绑定浏览器、五分钟过期且只能使用一次。
 - 写操作必须同时通过同源 `Origin` 和 CSRF 校验。
 - 普通用户创建后默认没有任何容器权限；管理员明确授权后才可访问。
-- 每个 Agent 使用独立令牌，只接受日志、启动、停止和重启四类任务。
-- 服务端不向 Agent 发送任意命令，不支持删除容器、拉取镜像或修改挂载。
+- 每个 Agent 使用独立令牌，只接受日志、启动、停止、重启和同仓库换 Tag 五类任务。
+- 服务端不向 Agent 发送任意命令；镜像更新仅管理员可发起，Server 与 Agent 都会校验新旧仓库一致。系统不支持删除容器、任意指定仓库、任意修改挂载或执行 Shell。
 
 企微授权地址和成员身份接口依据[企业微信官方网页授权文档](https://developer.work.weixin.qq.com/document/path/91022)和[获取访问用户身份文档](https://developer.work.weixin.qq.com/document/path/91023)实现。
 
@@ -427,7 +427,22 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 
 不要删除或复制到其他节点使用 `cloudhelm-data` 目录；否则节点会丢失独立身份或复用错误身份。其余节点重复相同步骤，但应使用不同的 `CLOUDHELM_AGENT_NAME` 和正确的环境名称。
 
-### 10. 部署验收清单
+### 10. 管理员更新容器镜像 Tag
+
+管理员可在 H5 或小程序的容器详情中选择“更换 Tag”。操作分为两步：先填写新 Tag，再核对容器名、原镜像和新镜像并二次确认。普通运维账号即使拥有该容器的启停权限，也不能更新镜像。
+
+安全与执行约束如下：
+
+- 只能从 `registry/team/app:old` 更新到同一 `registry/team/app:new`；Server 和 Agent 会分别校验仓库名，digest、同 Tag 和不同仓库均会拒绝；
+- Agent 先拉取新镜像，成功后才停止旧容器；重建时保留环境变量、命令、端口、卷、网络别名、GPU、资源限制、重启策略和 Compose 标签；
+- 新容器创建或启动失败时，Agent 会删除失败的新容器、恢复旧名称并重新启动旧容器；旧卷不会被删除；
+- 自动删除容器、使用静态 IP 的容器以及 Agent 自身容器会被拒绝在线更新，避免无法可靠回滚；
+- Compose 管理的容器只会即时替换，服务器上的 `compose.yml` 不会被云舵修改。确认稳定后必须同步更新编排文件中的 Tag，否则未来强制重建或重新部署可能恢复旧版本；
+- 私有仓库必须让 Agent 容器能够读取相应 Docker 登录凭据，例如只读挂载专用的 `/root/.docker/config.json`。该凭据应只包含必要仓库的拉取权限，不要使用个人全局管理员凭据。
+
+镜像替换属于高风险管理操作。建议先在测试节点验证新 Tag、健康检查、数据迁移兼容性和回滚路径，再变更生产容器，并从审计页面确认任务结果。
+
+### 11. 部署验收清单
 
 - `https://实际域名/healthz` 返回 `200`；
 - 浏览器显示的证书域名正确且证书链有效；
@@ -439,9 +454,10 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 - Agent 页面状态正常，日志中没有持续认证或 TLS 错误；
 - NVIDIA 节点的 Agent 容器内 `nvidia-smi` 正常，页面显示的型号、显存和数量与宿主机一致；
 - 执行一次测试容器日志读取，并确认审计页面有记录；
+- 使用测试容器执行一次同仓库换 Tag，并确认不同仓库、同 Tag 和运维角色均被拒绝；
 - 已创建第二位管理员并完成首次数据库备份。
 
-### 11. 常见部署故障
+### 12. 常见部署故障
 
 |现象|优先检查|
 |---|---|
@@ -458,6 +474,9 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 |宿主机可运行 `nvidia-smi`，Agent 容器却没有该命令|是否同时使用 `agent.gpu.compose.yml`；执行 `nvidia-ctk runtime configure --runtime=docker` 后是否重启 Docker；`docker info` 是否列出 `nvidia` runtime|
 |容器内可运行 `nvidia-smi`，页面却提示 GPU 不可用|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH` 是否为 `/usr/bin/nvidia-smi`，查看 Agent 日志中的 XML 解析、超时或输出上限错误|
 |页面有 GPU，但某容器显示未分配|Docker inspect 的 `HostConfig.DeviceRequests` 是否包含 NVIDIA GPU；旧式 runtime 则检查 `NVIDIA_VISIBLE_DEVICES`|
+|更新镜像提示只能使用同一仓库|只填写 Tag，或确认新旧镜像的 registry/namespace/repository 完全一致|
+|更新镜像拉取失败|Agent 是否能访问镜像仓库；私有仓库的只读登录凭据是否挂载到 Agent 容器|
+|更新后再次部署恢复旧镜像|云舵不会改写 Compose 文件；将验证通过的新 Tag 同步写入编排文件|
 
 排查命令：
 
@@ -506,7 +525,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 ## 企业自用小程序
 
-仓库的 `miniprogram/` 是原生企业微信小程序前端，面向单一企业内部使用，不需要注册企业微信第三方服务商。它复用现有 Server、Agent、用户表、容器权限和审计数据，包含总览、节点、NVIDIA GPU、容器详情、日志、启停/重启、审计以及管理员的用户授权页面。
+仓库的 `miniprogram/` 是原生企业微信小程序前端，面向单一企业内部使用，不需要注册企业微信第三方服务商。它复用现有 Server、Agent、用户表、容器权限和审计数据，包含总览、节点、NVIDIA GPU、容器详情、日志、启停/重启、管理员同仓库换 Tag、审计以及用户授权页面。
 
 登录流程为：
 
@@ -621,6 +640,7 @@ module.exports = {
 - 只有确实需要启停服务的人使用运维角色；
 - 管理员账号数量保持少量；
 - 生产容器停止和重启前确认影响窗口；
+- 镜像更新仅使用不可变、已扫描并经过测试的 Tag；更新前核对原/新镜像，更新后同步编排文件；
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 

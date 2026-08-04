@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cloudhelm.models import TaskStatus, UserRole
 
@@ -146,7 +146,7 @@ class HeartbeatRequest(BaseModel):
 class AgentTask(BaseModel):
     id: str
     docker_id: str
-    action: Literal["start", "stop", "restart", "logs"]
+    action: Literal["start", "stop", "restart", "logs", "update_image"]
     arguments: dict[str, Any]
 
 
@@ -154,11 +154,23 @@ class TaskResultRequest(BaseModel):
     success: bool
     result: str | None = None
     error: str | None = None
+    docker_id: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class ActionRequest(BaseModel):
-    action: Literal["start", "stop", "restart", "logs"]
+    action: Literal["start", "stop", "restart", "logs", "update_image"]
     tail: int = Field(default=200, ge=10, le=2000)
+    target_image: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def require_target_image(self) -> "ActionRequest":
+        if self.action == "update_image" and not self.target_image:
+            raise ValueError("更新镜像时必须提供目标镜像")
+        if self.action != "update_image" and self.target_image is not None:
+            raise ValueError("该操作不接受目标镜像")
+        if self.target_image is not None:
+            self.target_image = self.target_image.strip()
+        return self
 
 
 class TaskOut(BaseModel):

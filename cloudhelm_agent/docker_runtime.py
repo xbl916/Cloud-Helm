@@ -1,7 +1,12 @@
+import os
+import time
+from copy import deepcopy
 from typing import Any
 
 import docker
 from docker.errors import DockerException, NotFound
+
+from cloudhelm.image_reference import validate_tag_change
 
 
 class DockerRuntime:
@@ -35,10 +40,10 @@ class DockerRuntime:
                     memory_usage, memory_limit, memory_percent = self._memory(stats)
                 except DockerException:
                     pass
-            image = ""
-            if container.image.tags:
+            image = str((attrs.get("Config") or {}).get("Image") or "")
+            if not image and container.image.tags:
                 image = container.image.tags[0]
-            elif container.image.id:
+            elif not image and container.image.id:
                 image = container.image.id.split(":")[-1][:12]
             health = (state.get("Health") or {}).get("Status")
             gpu_devices, gpu_all = self._gpu_allocation(attrs)
@@ -146,7 +151,140 @@ class DockerRuntime:
         percent = usage / limit * 100 if limit else 0.0
         return usage, limit, percent
 
-    def execute(self, docker_id: str, action: str, arguments: dict[str, Any]) -> str:
+    @staticmethod
+    def _replacement_config(
+        attrs: dict[str, Any], target_image: str, image_id: str
+    ) -> dict[str, Any]:
+        config = deepcopy(attrs.get("Config") or {})
+        host_config = deepcopy(attrs.get("HostConfig") or {})
+        if host_config.get("AutoRemove"):
+            raise RuntimeError("auto-remove containers cannot be safely replaced")
+
+        config["Image"] = target_image
+        labels = dict(config.get("Labels") or {})
+        if "com.docker.compose.image" in labels:
+            labels["com.docker.compose.image"] = image_id
+        config["Labels"] = labels
+        config["HostConfig"] = host_config
+
+        # HostConfig.Binds normally contains named volumes. Explicitly reuse any
+        # anonymous volume that Docker only exposes through the Mounts section.
+        binds = list(host_config.get("Binds") or [])
+        for mount in attrs.get("Mounts") or []:
+            if mount.get("Type") != "volume" or not mount.get("Source"):
+                continue
+            destination = str(mount.get("Destination") or "")
+            if not destination or any(
+                f":{destination}:" in bind or bind.endswith(f":{destination}")
+                for bind in binds
+            ):
+                continue
+            mode = str(mount.get("Mode") or ("rw" if mount.get("RW") else "ro"))
+            binds.append(f"{mount['Source']}:{destination}:{mode}")
+        if binds:
+            host_config["Binds"] = binds
+
+        endpoints: dict[str, dict[str, Any]] = {}
+        for network_name, settings in (
+            (attrs.get("NetworkSettings") or {}).get("Networks") or {}
+        ).items():
+            ipam = settings.get("IPAMConfig") or {}
+            if ipam.get("IPv4Address") or ipam.get("IPv6Address"):
+                raise RuntimeError(
+                    "containers with a static IP cannot be safely replaced"
+                )
+            endpoint = {
+                key: deepcopy(settings[key])
+                for key in (
+                    "IPAMConfig",
+                    "Links",
+                    "Aliases",
+                    "DriverOpts",
+                    "GwPriority",
+                )
+                if settings.get(key) is not None
+            }
+            endpoints[str(network_name)] = endpoint
+        if endpoints:
+            config["NetworkingConfig"] = {"EndpointsConfig": endpoints}
+        return config
+
+    def _update_image(
+        self, container: Any, expected_image: str, target_image: str
+    ) -> dict[str, str]:
+        container.reload()
+        attrs = container.attrs
+        actual_image = str((attrs.get("Config") or {}).get("Image") or "")
+        try:
+            expected_ref, target_ref = validate_tag_change(
+                expected_image, target_image
+            )
+            actual_ref, _ = validate_tag_change(actual_image, target_image)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if actual_ref.canonical != expected_ref.canonical:
+            raise RuntimeError(
+                "container image changed after the task was queued; refresh and retry"
+            )
+
+        own_hostname = os.environ.get("HOSTNAME", "")
+        if len(own_hostname) >= 12 and container.id.startswith(own_hostname):
+            raise RuntimeError("the Agent cannot replace its own container")
+
+        pulled_image = self.client.images.pull(target_ref.canonical)
+        create_config = self._replacement_config(
+            attrs, target_ref.canonical, pulled_image.id
+        )
+        original_name = str(attrs.get("Name") or container.name).lstrip("/")
+        backup_name = (
+            f"{original_name[:180]}.cloudhelm-backup-"
+            f"{container.id[:12]}-{time.monotonic_ns()}"
+        )
+        was_running = bool((attrs.get("State") or {}).get("Running"))
+        replacement = None
+
+        try:
+            if was_running:
+                container.stop(timeout=30)
+            container.rename(backup_name)
+            created = self.client.api.create_container_from_config(
+                create_config, name=original_name
+            )
+            replacement = self.client.containers.get(created["Id"])
+            if was_running:
+                replacement.start()
+                time.sleep(0.5)
+                replacement.reload()
+                state = replacement.attrs.get("State") or {}
+                if not state.get("Running") and not state.get("Restarting"):
+                    raise RuntimeError("replacement container exited during startup")
+        except Exception:
+            if replacement is not None:
+                try:
+                    replacement.remove(force=True, v=False)
+                except DockerException:
+                    pass
+            try:
+                container.rename(original_name)
+                if was_running:
+                    container.start()
+            except DockerException:
+                pass
+            raise
+
+        cleanup_warning = ""
+        try:
+            container.remove(force=True, v=False)
+        except DockerException as exc:
+            cleanup_warning = f"; old stopped container retained as {backup_name}: {exc}"
+        return {
+            "message": f"container image updated to {target_ref.canonical}{cleanup_warning}",
+            "docker_id": replacement.id,
+        }
+
+    def execute(
+        self, docker_id: str, action: str, arguments: dict[str, Any]
+    ) -> str | dict[str, str]:
         try:
             container = self.client.containers.get(docker_id)
         except NotFound as exc:
@@ -165,4 +303,10 @@ class DockerRuntime:
         if action == "restart":
             container.restart(timeout=15)
             return "container restarted"
+        if action == "update_image":
+            return self._update_image(
+                container,
+                str(arguments.get("expected_image") or ""),
+                str(arguments.get("target_image") or ""),
+            )
         raise RuntimeError(f"unsupported action: {action}")
