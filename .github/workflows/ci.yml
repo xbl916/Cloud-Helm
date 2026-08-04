@@ -65,7 +65,8 @@ jobs:
           docker compose up -d --no-build --wait --wait-timeout 180
           test "$(stat -c %u cloudhelm-data)" = "10001"
           test "$(stat -c %a cloudhelm-data)" = "700"
-          test -s cloudhelm-data/cloudhelm.db
+          sudo test -s cloudhelm-data/cloudhelm.db
+          test "$(sudo stat -c %u cloudhelm-data/cloudhelm.db)" = "10001"
           curl --fail http://127.0.0.1:8080/healthz
 
       - name: Show container logs
