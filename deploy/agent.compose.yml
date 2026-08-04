@@ -1,37 +1,10 @@
 name: cloudhelm-agent
 services:
-  data-init:
-    image: ghcr.io/xbl916/cloud-helm-agent:0.5.0
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -eu
-        chown -R 0:0 /data
-        chmod 0700 /data
-    restart: "no"
-    read_only: true
-    network_mode: none
-    volumes:
-      - ./cloudhelm-data:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - FOWNER
-      - DAC_OVERRIDE
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
   agent:
     build:
       context: ..
       dockerfile: deploy/agent.Dockerfile
-    image: ghcr.io/xbl916/cloud-helm-agent:0.5.0
+    image: ghcr.io/xbl916/cloud-helm-agent:0.5.1
     restart: unless-stopped
     init: true
     read_only: true
@@ -40,9 +13,6 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./cloudhelm-data:/data
-    depends_on:
-      data-init:
-        condition: service_completed_successfully
     tmpfs:
       - /tmp:size=64m,mode=1777
     network_mode: bridge
@@ -50,6 +20,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      - SETPCAP
     logging:
       driver: json-file
       options:

@@ -10,7 +10,7 @@ RUN python -m pip wheel --wheel-dir /wheels ".[server]" "psycopg>=3.2,<4"
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends libpq5 tzdata \
+    && apt-get install --yes --no-install-recommends libpq5 tzdata util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 cloudhelm \
     && useradd --uid 10001 --gid cloudhelm --home-dir /app \
@@ -18,8 +18,9 @@ RUN apt-get update \
     && mkdir -p /data /app && chown cloudhelm:cloudhelm /data /app
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels
-USER cloudhelm
+COPY --chmod=0755 deploy/server-entrypoint.sh /usr/local/bin/cloudhelm-server-entrypoint
 WORKDIR /app
 EXPOSE 8080
 VOLUME ["/data"]
+ENTRYPOINT ["cloudhelm-server-entrypoint"]
 CMD ["uvicorn", "cloudhelm.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers", "--no-access-log"]

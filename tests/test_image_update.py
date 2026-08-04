@@ -153,7 +153,7 @@ def test_only_admin_can_queue_same_repository_image_update(
             "name": "镜像更新节点",
             "hostname": "update-node",
             "environment": "test",
-            "agent_version": "0.5.0",
+            "agent_version": "0.5.1",
         },
     )
     credentials = enroll.json()
@@ -166,7 +166,7 @@ def test_only_admin_can_queue_same_repository_image_update(
         headers=agent_headers,
         json={
             "hostname": "update-node",
-            "agent_version": "0.5.0",
+            "agent_version": "0.5.1",
             "docker_version": "28.0.0",
             "os": "Linux / x86_64",
             "containers": [

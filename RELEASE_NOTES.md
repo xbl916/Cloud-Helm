@@ -1,4 +1,11 @@
-# Cloud Helm 0.5.0
+# Cloud Helm 0.5.1
+
+## 无残留初始化容器
+
+- Server 与 Agent Compose 删除一次性 `data-init` 服务，启动后不再留下 `Exited (0)` 容器。
+- Server 主容器只在入口阶段使用最小文件权限能力修复 `/data`，随后切换到 UID/GID `10001` 并清空全部 Linux capabilities 后启动应用。
+- Agent 主容器初始化自己的 root 状态目录后立即清空全部 Linux capabilities；Docker Socket 访问方式保持不变。
+- 使用 `docker compose up -d --remove-orphans` 升级时会自动删除旧版遗留的 `data-init` 容器，不影响宿主机 `cloudhelm-data` 数据。
 
 ## 企业自用小程序
 
@@ -14,7 +21,7 @@
 - GPU 运行方式支持 `linux/amd64` 与 `linux/arm64`；`linux/arm/v7` Agent 继续发布，但不承诺 NVIDIA GPU 监控。
 - 增加容器内 `nvidia-smi -L` 和 Agent GPU 上报的部署验收说明。
 
-`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.0 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
+`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.1 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
 
 ## 管理员同仓库换 Tag
 
@@ -38,9 +45,9 @@
 
 ## 发布产物
 
-- `cloudhelm-0.5.0.tar.gz`：架构无关源码与小程序发布包。
-- `cloudhelm-0.5.0.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.5.0`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.0`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
+- `cloudhelm-0.5.1.tar.gz`：架构无关源码与小程序发布包。
+- `cloudhelm-0.5.1.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.5.1`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.1`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
 发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。

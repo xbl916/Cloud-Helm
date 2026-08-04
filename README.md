@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.5.0`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.5.1`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
@@ -93,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.5.0.tar.gz.sha256
-tar -xzf cloudhelm-0.5.0.tar.gz
-cd cloudhelm-0.5.0
+sha256sum -c cloudhelm-0.5.1.tar.gz.sha256
+tar -xzf cloudhelm-0.5.1.tar.gz
+cd cloudhelm-0.5.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.5.0.tar.gz: OK
+cloudhelm-0.5.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -264,14 +264,14 @@ Server 的宿主机端口仍保持 `127.0.0.1:8080`，不要为了让 Caddy 容�
 ```bash
 docker compose config
 docker compose pull
-docker compose up -d --no-build
+docker compose up -d --no-build --remove-orphans
 docker compose ps
 docker compose logs --tail=100 server
 ```
 
 如果需要审计或修改源码后本机构建，可以改为执行 `docker compose build --pull`，再去掉 `up` 的 `--no-build`。正常情况下 `docker compose ps` 中 Server 最终应显示为 `healthy`。
 
-Compose 会先运行一次性 `data-init` 服务，自动把宿主机数据目录设置为 Server 所需的 `10001:10001` 和 `0700`，随后才启动 Server。执行 `docker compose ps -a data-init` 时看到其状态为 `Exited (0)` 是正常现象。该初始化服务不读取 `.env`、不连接网络、不挂载 Docker Socket；不要删除 `depends_on` 或改用 `chmod 777`。
+Server 主容器入口会先使用仅限文件权限初始化的 capabilities，把 `/data` 设置为 `10001:10001` 和 `0700`；随后立即切换到 UID/GID `10001`、清空全部 capabilities，再启动应用。Compose 不再创建一次性初始化服务，因此不会留下 `Exited (0)` 容器。由旧版本升级时，首次启动必须保留 `--remove-orphans`，它只删除旧 `data-init` 容器，不会删除宿主机 `cloudhelm-data`。
 
 分别检查本机后端和公网 HTTPS：
 
@@ -295,7 +295,7 @@ docker compose port server 8080
 
 输出应以 `127.0.0.1:` 开头。从另一台机器访问 `http://管理中心IP:8080` 应失败。
 
-SQLite 数据保存在发布目录的 `./cloudhelm-data/cloudhelm.db`。容器内路径仍为 `/data/cloudhelm.db`，目录由 `data-init` 自动交给容器用户 `10001:10001`。`docker compose down` 和 `docker compose down -v` 都不会删除这个宿主机目录；删除或覆盖 `cloudhelm-data` 才会丢失数据库。
+SQLite 数据保存在发布目录的 `./cloudhelm-data/cloudhelm.db`。容器内路径仍为 `/data/cloudhelm.db`，目录由 Server 入口自动交给容器用户 `10001:10001`。`docker compose down` 和 `docker compose down -v` 都不会删除这个宿主机目录；删除或覆盖 `cloudhelm-data` 才会丢失数据库。
 
 所有 Compose 服务（Server、Agent 和 PostgreSQL）都使用 `json-file` 日志轮转：单文件最多 `50m`、保留 3 个文件，即每个容器最多约 `150m` Docker 日志。业务数据和数据库文件不计入该上限。
 
@@ -322,7 +322,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.5.0/deploy
+cd cloudhelm-0.5.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -374,14 +374,14 @@ CLOUDHELM_AGENT_GPU_MAX_OUTPUT_BYTES=4194304
 curl --fail https://ops.company.com/healthz
 docker compose -f agent.compose.yml config
 docker compose -f agent.compose.yml pull
-docker compose -f agent.compose.yml up -d --no-build
+docker compose -f agent.compose.yml up -d --no-build --remove-orphans
 docker compose -f agent.compose.yml ps
 docker compose -f agent.compose.yml logs --tail=100 agent
 ```
 
 首次成功日志应包含节点已注册以及容器数量已上报。回到云舵页面，节点应在一个上报周期内显示为在线。
 
-Agent 启动前也会运行一次性 `data-init`，自动将其状态目录设置为仅容器 root 可读写的 `0700`。执行 `docker compose -f agent.compose.yml ps -a data-init` 看到 `Exited (0)` 是正常现象；该初始化服务不连接网络，也不会挂载 Docker Socket。
+Agent 主容器入口会把状态目录设置为 root 所有、权限 `0700`，随后立即清空全部 Linux capabilities，再启动 Agent。Compose 不再创建一次性初始化服务。由旧版本升级时，首次启动加入 `--remove-orphans` 即可删除旧 `data-init` 容器，节点凭据文件不会被删除。
 
 #### NVIDIA GPU 节点启动方式
 
@@ -401,13 +401,13 @@ docker run --rm --runtime=nvidia --gpus all ubuntu:24.04 nvidia-smi -L
 ```bash
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml config
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml pull
-docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build --remove-orphans
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent test -x /usr/bin/nvidia-smi
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-smi -L
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.5.0 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+0.5.1 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -527,6 +527,17 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 仓库的 `miniprogram/` 是原生企业微信小程序前端，面向单一企业内部使用，不需要注册企业微信第三方服务商。它复用现有 Server、Agent、用户表、容器权限和审计数据，包含总览、节点、NVIDIA GPU、容器详情、日志、启停/重启、管理员同仓库换 Tag、审计以及用户授权页面。
 
+> **小程序不会自动替换原来的 H5。** 企微自建应用的“应用主页”如果仍配置为 `https://.../api/v1/auth/wecom/start`，从工作台点击后打开的一定还是 H5。要看到原生小程序，必须完成下面的注册、上传和关联，然后回到自建应用的“应用主页 → 设置”，将入口选择为已关联的小程序；也可以保留 H5 自建应用，并把关联小程序作为工作台中的独立入口。
+
+两种入口的区别：
+
+|入口|企微后台配置|实际前端|登录方式|
+|---|---|---|---|
+|原 H5|应用主页填写云舵 HTTPS 地址|`cloudhelm/static/`|网页 OAuth|
+|企业自用小程序|关联已发布小程序，并将应用主页/工作台入口切换到该小程序|`miniprogram/`|`wx.qy.login()`|
+
+只升级 Server 或 Agent 不会改变工作台入口；小程序也不涉及 Agent 改造，Agent 仍只和 Server API 通信。
+
 登录流程为：
 
 ```text
@@ -549,6 +560,7 @@ POST /api/v1/auth/wecom-mini/login
 3. 在企业微信管理后台进入“应用管理 → 小程序 → 关联小程序”，按页面指引关联并设置成员可见范围。
 4. 从关联后的小程序详情取得**当前企业对应的 Secret**。它与 H5 自建应用 Secret、微信小程序 AppSecret 是不同的凭据，以企业微信后台实际展示为准。
 5. 小程序正式发布前，在微信小程序后台完成版本审核、备案和服务器域名配置。
+6. 回到云舵自建应用详情，点击“应用主页 → 设置”。选择刚关联的小程序作为工作台入口；如果这里仍选择“网页”，成员看到的仍是 H5。
 
 企业微信支持关联微信小程序，并使用 `wx.qy.login()` 获取临时 code；Server 再通过企业微信 `jscode2session` 换取员工 `UserId`。参考[企业微信小程序开发前须知](https://developers.weixin.qq.com/miniprogram/dev/dev_wxwork/dev-doc/qywx-api.html)和[小程序登录接口](https://developers.weixin.qq.com/miniprogram/dev/dev_wxwork/dev-doc/qywx-api/login/wx.qy.login.html)。
 
@@ -586,10 +598,11 @@ module.exports = {
 ### 4. 联调与发布
 
 1. 在微信开发者工具中选择企业微信运行环境或企业模拟，确认 `wx.qy.login()` 能返回 code。
-2. 先上传体验版，并把测试成员同时加入小程序体验范围、企业微信小程序可见范围和云舵“用户与权限”。
-3. 验证未绑定成员被拒绝，普通成员只看见已授权容器，只读成员不能启停容器。
-4. 验证日志、停止和重启操作均出现在审计页面。
-5. 完成小程序隐私说明、备案和版本审核后，再扩大企业微信可见范围。
+2. 点击“上传”生成体验版；仅在开发者工具中预览不会出现在企业微信工作台。
+3. 把测试成员同时加入小程序体验范围、企业微信小程序可见范围和云舵“用户与权限”。
+4. 验证未绑定成员被拒绝，普通成员只看见已授权容器，只读成员不能启停容器。
+5. 验证日志、停止和重启操作均出现在审计页面。
+6. 完成小程序隐私说明、备案和版本审核后，再扩大企业微信可见范围。
 
 小程序与 H5 可以同时保留：移动端使用小程序，桌面端和应急入口继续使用 H5。两者共用会话数量上限；默认单用户最多 5 个有效会话、每个会话 60 分钟。
 
@@ -689,7 +702,7 @@ docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml ps
 ```
 
-PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`，数据保存在 `deploy/cloudhelm-postgres-data`。Server 的 `cloudhelm-data` 仍由一次性 `data-init` 自动初始化；PostgreSQL 官方入口负责初始化自己的数据库目录。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
+PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`，数据保存在 `deploy/cloudhelm-postgres-data`。Server 的 `cloudhelm-data` 由 Server 自身入口初始化；PostgreSQL 官方入口负责初始化自己的数据库目录，不会产生额外初始化容器。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
 
 查看日志：
 
@@ -738,7 +751,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.5.0
+bash scripts/package-release.sh 0.5.1
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -746,11 +759,11 @@ bash scripts/package-release.sh 0.5.0
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.5.1
+git push origin v0.5.1
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.5.0`
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.0`
+- `ghcr.io/xbl916/cloud-helm-server:0.5.1`
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.1`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

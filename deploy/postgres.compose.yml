@@ -1,37 +1,10 @@
 name: cloudhelm
 services:
-  data-init:
-    image: ghcr.io/xbl916/cloud-helm-server:0.5.0
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -eu
-        chown -R 10001:10001 /data
-        chmod 0700 /data
-    restart: "no"
-    read_only: true
-    network_mode: none
-    volumes:
-      - ../cloudhelm-data:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - FOWNER
-      - DAC_OVERRIDE
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
   server:
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
-    image: ghcr.io/xbl916/cloud-helm-server:0.5.0
+    image: ghcr.io/xbl916/cloud-helm-server:0.5.1
     restart: unless-stopped
     init: true
     read_only: true
@@ -46,8 +19,6 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     depends_on:
-      data-init:
-        condition: service_completed_successfully
       database:
         condition: service_healthy
     healthcheck:
@@ -60,6 +31,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+      - SETPCAP
     networks:
       - default
       - backend
