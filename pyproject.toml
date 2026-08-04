@@ -1,20 +1,22 @@
 [project]
 name = "cloud-helm"
-version = "0.4.0"
+version = "0.4.1"
 description = "Cloud Helm - a lightweight multi-node Docker operations console"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
   "pydantic-settings>=2.10,<3",
-  "python-multipart>=0.0.20,<1",
-  "sqlalchemy>=2.0,<3",
-  "uvicorn[standard]>=0.35,<1",
 ]
 
 [project.optional-dependencies]
+server = [
+  "fastapi>=0.116,<1",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn>=0.35,<1",
+]
 postgres = ["psycopg[binary]>=3.2,<4"]
-agent = ["docker>=7.1,<8", "httpx>=0.28,<1", "pydantic-settings>=2.10,<3"]
+agent = ["docker>=7.1,<8"]
 test = ["pytest>=9.0.3,<10", "pytest-cov>=6.2,<8"]
 
 [build-system]

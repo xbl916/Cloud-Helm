@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.4.0`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.4.1`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
@@ -91,15 +91,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.4.0.tar.gz.sha256
-tar -xzf cloudhelm-0.4.0.tar.gz
-cd cloudhelm-0.4.0
+sha256sum -c cloudhelm-0.4.1.tar.gz.sha256
+tar -xzf cloudhelm-0.4.1.tar.gz
+cd cloudhelm-0.4.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.4.0.tar.gz: OK
+cloudhelm-0.4.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -222,19 +222,19 @@ sudo systemctl status caddy --no-pager
 
 在 Cloud Helm Server 尚未启动时，域名可能暂时返回 `502`，这是反向代理找不到后端的正常现象。如果使用 Nginx 或其他网关，也必须转发原始 `Host`、客户端 IP，并保证公网只能通过 HTTPS 进入。
 
-### 7. 构建并启动管理中心
+### 7. 拉取并启动管理中心
 
-先检查 Compose 展开结果，再构建镜像：
+发布标签会生成 `amd64`、`arm64` 两种架构的 Server 镜像。Docker 会自动拉取与当前设备匹配的镜像：
 
 ```bash
 docker compose config
-docker compose build --pull
-docker compose up -d
+docker compose pull
+docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail=100 server
 ```
 
-首次构建会下载 Python 基础镜像和依赖，需要几分钟。正常情况下 `docker compose ps` 中 Server 最终应显示为 `healthy`。
+如果需要审计或修改源码后本机构建，可以改为执行 `docker compose build --pull`，再去掉 `up` 的 `--no-build`。正常情况下 `docker compose ps` 中 Server 最终应显示为 `healthy`。
 
 分别检查本机后端和公网 HTTPS：
 
@@ -283,7 +283,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.4.0/deploy
+cd cloudhelm-0.4.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 ```
@@ -320,8 +320,8 @@ CLOUDHELM_AGENT_POLL_SECONDS=3
 ```bash
 curl --fail https://ops.company.com/healthz
 docker compose -f agent.compose.yml config
-docker compose -f agent.compose.yml build --pull
-docker compose -f agent.compose.yml up -d
+docker compose -f agent.compose.yml pull
+docker compose -f agent.compose.yml up -d --no-build
 docker compose -f agent.compose.yml ps
 docker compose -f agent.compose.yml logs --tail=100 agent
 ```
@@ -334,8 +334,8 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 
 ```bash
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml config
-docker compose -f agent.compose.yml -f agent.gpu.compose.yml build --pull
-docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml pull
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-smi
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
@@ -563,10 +563,22 @@ chmod 600 cloudhelm-postgres.dump
 ## 开发、验证和发布
 
 ```bash
-uv sync --extra test --extra agent --extra postgres
+uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.4.0
+bash scripts/package-release.sh 0.4.1
 ```
 
-发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥；目标设备会为自身 CPU 架构构建 Server 与 Agent 镜像。
+发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
+
+推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
+
+```bash
+git tag v0.4.1
+git push origin v0.4.1
+```
+
+- `ghcr.io/xbl916/cloud-helm-server:0.4.1`
+- `ghcr.io/xbl916/cloud-helm-agent:0.4.1`
+
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.4.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
