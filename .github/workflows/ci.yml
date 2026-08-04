@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and fresh-directory smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install locked development environment
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.11.21
+          uv sync --extra server --extra agent --extra test --locked
+
+      - name: Validate source and version consistency
+        run: |
+          uv run ruff check .
+          uv run pytest
+          uv run python scripts/check-version.py
+          bash -n scripts/package-release.sh
+
+      - name: Prepare smoke-test configuration
+        run: |
+          cp .env.example .env
+          sed -i \
+            -e 's#REPLACE_ME_WITH_A_SEPARATE_RANDOM_TOKEN#ci-agent-enrollment-token-32-bytes#' \
+            -e 's#https://ops.example.com#https://localhost#' \
+            -e 's#REPLACE_ME_WITH_WECOM_CORP_ID#ww-ci-corp#' \
+            -e 's#REPLACE_ME_WITH_WECOM_AGENT_ID#1000002#' \
+            -e 's#REPLACE_ME_WITH_WECOM_APP_SECRET#ci-wecom-secret-value#' \
+            -e 's#REPLACE_ME_WITH_ADMIN_WECOM_USERID#ci-admin#' \
+            .env
+
+      - name: Validate Compose configurations
+        run: |
+          cp deploy/agent.env.example deploy/agent.env
+          cp deploy/postgres.env.example deploy/postgres.env
+          sed -i 's#REPLACE_WITH_SERVER_ENROLLMENT_TOKEN#ci-agent-enrollment-token-32-bytes#' deploy/agent.env
+          sed -i 's#REPLACE_ME_WITH_A_LONG_RANDOM_PASSWORD#ci-postgres-password-32-bytes#' deploy/postgres.env
+          docker compose config --quiet
+          docker compose -f deploy/agent.compose.yml -f deploy/agent.gpu.compose.yml config --quiet
+          docker compose --env-file deploy/postgres.env -f deploy/postgres.compose.yml config --quiet
+
+      - name: Start Server from a fresh data directory
+        run: |
+          test ! -e cloudhelm-data
+          docker compose build server
+          docker compose up -d --no-build --wait --wait-timeout 180
+          test "$(stat -c %u cloudhelm-data)" = "10001"
+          test "$(stat -c %a cloudhelm-data)" = "700"
+          test -s cloudhelm-data/cloudhelm.db
+          curl --fail http://127.0.0.1:8080/healthz
+
+      - name: Show container logs
+        if: always()
+        run: docker compose logs --no-color
+
+      - name: Stop smoke-test services
+        if: always()
+        run: docker compose down

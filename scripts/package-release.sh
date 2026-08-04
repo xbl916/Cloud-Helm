@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${1:-0.4.1}"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ $# -gt 0 ]]; then
+  version="$1"
+else
+  version="$(python -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["project"]["version"])' "$project_root/pyproject.toml")"
+fi
+python "$project_root/scripts/check-version.py" "$version"
 release_root="$project_root/release"
 stage_dir="$release_root/cloudhelm-$version"
 

@@ -4,7 +4,6 @@ from pathlib import Path
 from cloudhelm_agent.docker_runtime import DockerRuntime
 from cloudhelm_agent.gpu_monitor import GpuMonitor, parse_nvidia_smi_xml
 
-
 NVIDIA_SMI_XML = """<?xml version="1.0" ?>
 <nvidia_smi_log>
   <driver_version>570.124.06</driver_version>

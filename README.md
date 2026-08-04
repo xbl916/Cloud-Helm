@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.4.1`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.4.2`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
@@ -91,15 +91,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.4.1.tar.gz.sha256
-tar -xzf cloudhelm-0.4.1.tar.gz
-cd cloudhelm-0.4.1
+sha256sum -c cloudhelm-0.4.2.tar.gz.sha256
+tar -xzf cloudhelm-0.4.2.tar.gz
+cd cloudhelm-0.4.2
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.4.1.tar.gz: OK
+cloudhelm-0.4.2.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -144,7 +144,7 @@ getent hosts ops.company.com
 ```bash
 cp .env.example .env
 chmod 600 .env
-sudo install -d -m 0700 -o 10001 -g 10001 cloudhelm-data
+install -d -m 0700 cloudhelm-data
 openssl rand -hex 32
 ```
 
@@ -253,6 +253,8 @@ docker compose logs --tail=100 server
 
 如果需要审计或修改源码后本机构建，可以改为执行 `docker compose build --pull`，再去掉 `up` 的 `--no-build`。正常情况下 `docker compose ps` 中 Server 最终应显示为 `healthy`。
 
+Compose 会先运行一次性 `data-init` 服务，自动把宿主机数据目录设置为 Server 所需的 `10001:10001` 和 `0700`，随后才启动 Server。执行 `docker compose ps -a data-init` 时看到其状态为 `Exited (0)` 是正常现象。该初始化服务不读取 `.env`、不连接网络、不挂载 Docker Socket；不要删除 `depends_on` 或改用 `chmod 777`。
+
 分别检查本机后端和公网 HTTPS：
 
 ```bash
@@ -275,7 +277,7 @@ docker compose port server 8080
 
 输出应以 `127.0.0.1:` 开头。从另一台机器访问 `http://管理中心IP:8080` 应失败。
 
-SQLite 数据保存在发布目录的 `./cloudhelm-data/cloudhelm.db`。容器内路径仍为 `/data/cloudhelm.db`。目录固定由容器用户 `10001:10001` 写入，不要改成全员可写权限。`docker compose down` 和 `docker compose down -v` 都不会删除这个宿主机目录；删除或覆盖 `cloudhelm-data` 才会丢失数据库。
+SQLite 数据保存在发布目录的 `./cloudhelm-data/cloudhelm.db`。容器内路径仍为 `/data/cloudhelm.db`，目录由 `data-init` 自动交给容器用户 `10001:10001`。`docker compose down` 和 `docker compose down -v` 都不会删除这个宿主机目录；删除或覆盖 `cloudhelm-data` 才会丢失数据库。
 
 所有 Compose 服务（Server、Agent 和 PostgreSQL）都使用 `json-file` 日志轮转：单文件最多 `50m`、保留 3 个文件，即每个容器最多约 `150m` Docker 日志。业务数据和数据库文件不计入该上限。
 
@@ -302,7 +304,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.4.1/deploy
+cd cloudhelm-0.4.2/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -360,6 +362,8 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 ```
 
 首次成功日志应包含节点已注册以及容器数量已上报。回到云舵页面，节点应在一个上报周期内显示为在线。
+
+Agent 启动前也会运行一次性 `data-init`，自动将其状态目录设置为仅容器 root 可读写的 `0700`。执行 `docker compose -f agent.compose.yml ps -a data-init` 看到 `Exited (0)` 是正常现象；该初始化服务不连接网络，也不会挂载 Docker Socket。
 
 #### NVIDIA GPU 节点启动方式
 
@@ -564,7 +568,7 @@ docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml ps
 ```
 
-PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`，数据保存在 `deploy/cloudhelm-postgres-data`。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
+PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`，数据保存在 `deploy/cloudhelm-postgres-data`。Server 的 `cloudhelm-data` 仍由一次性 `data-init` 自动初始化；PostgreSQL 官方入口负责初始化自己的数据库目录。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
 
 查看日志：
 
@@ -613,7 +617,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.4.1
+bash scripts/package-release.sh 0.4.2
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -621,11 +625,11 @@ bash scripts/package-release.sh 0.4.1
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.4.1
-git push origin v0.4.1
+git tag v0.4.2
+git push origin v0.4.2
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.4.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.4.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.4.2`
+- `ghcr.io/xbl916/cloud-helm-agent:0.4.2`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.4.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.4.2` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

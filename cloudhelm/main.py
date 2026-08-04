@@ -1,14 +1,15 @@
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-import secrets
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy import select
 
+from cloudhelm import __version__
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
 from cloudhelm.dependencies import CSRF_COOKIE, SESSION_COOKIE
@@ -49,7 +50,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.4.1",
+    version=__version__,
     docs_url="/api/docs" if settings.environment != "production" else None,
     redoc_url=None,
     lifespan=lifespan,
