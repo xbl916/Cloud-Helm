@@ -152,11 +152,14 @@ openssl rand -hex 32
 
 ```dotenv
 TZ=Asia/Shanghai
+CLOUDHELM_APP_NAME="云舵 Cloud Helm"
 CLOUDHELM_AGENT_ENROLLMENT_TOKEN=替换为openssl生成的随机值
 CLOUDHELM_PUBLIC_BASE_URL=https://ops.company.com
 CLOUDHELM_WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
 CLOUDHELM_WECOM_AGENT_ID=1000002
 CLOUDHELM_WECOM_SECRET=应用的Secret
+CLOUDHELM_WECOM_API_TIMEOUT_SECONDS=8
+CLOUDHELM_WECOM_API_BASE=https://qyapi.weixin.qq.com
 CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID=首位管理员的企微UserId
 CLOUDHELM_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 CLOUDHELM_DATABASE_URL=sqlite:////data/cloudhelm.db
@@ -165,6 +168,7 @@ CLOUDHELM_SESSION_MINUTES=60
 CLOUDHELM_MAX_SESSIONS_PER_USER=5
 CLOUDHELM_OAUTH_STATE_SECONDS=300
 CLOUDHELM_NODE_OFFLINE_SECONDS=60
+CLOUDHELM_MAX_TASK_RESULT_BYTES=262144
 CLOUDHELM_TRUST_PROXY_HEADERS=true
 CLOUDHELM_BIND_ADDRESS=127.0.0.1
 CLOUDHELM_PORT=8080
@@ -175,18 +179,28 @@ CLOUDHELM_PORT=8080
 |变量|说明|生产建议|
 |---|---|---|
 |`TZ`|容器系统时区|默认 `Asia/Shanghai`|
+|`CLOUDHELM_APP_NAME`|网页标题和 API 服务名称|默认 `云舵 Cloud Helm`，可按企业名称修改|
 |`CLOUDHELM_AGENT_ENROLLMENT_TOKEN`|Agent 首次注册的共享令牌|至少 32 字节随机值|
 |`CLOUDHELM_PUBLIC_BASE_URL`|用户实际访问的公网根地址|只包含 `https://域名`，不要带路径和结尾 `/`|
 |`CLOUDHELM_WECOM_CORP_ID`|企业 ID|从企微管理后台复制|
 |`CLOUDHELM_WECOM_AGENT_ID`|自建应用 AgentId|从应用详情复制|
 |`CLOUDHELM_WECOM_SECRET`|自建应用 Secret|仅服务器保存|
+|`CLOUDHELM_WECOM_API_TIMEOUT_SECONDS`|调用企微 API 的单次超时秒数|默认 8，可设 2–30|
+|`CLOUDHELM_WECOM_API_BASE`|企微 API 根地址|保持官方地址 `https://qyapi.weixin.qq.com`|
 |`CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID`|首次创建的管理员身份|填写准确企微 `UserId`|
-|`CLOUDHELM_SESSION_MINUTES`|网页会话绝对有效期|保持 60 分钟或更短|
-|`CLOUDHELM_MAX_SESSIONS_PER_USER`|单用户最大并发会话|默认 5|
-|`CLOUDHELM_DATABASE_URL`|服务端数据库|单机初始部署保持 SQLite 默认值|
+|`CLOUDHELM_BOOTSTRAP_ADMIN_DISPLAY_NAME`|首次创建的管理员显示名称|默认 `系统管理员`，最长 120 字符|
+|`CLOUDHELM_DATABASE_URL`|服务端数据库连接地址|单机初始部署保持 `sqlite:////data/cloudhelm.db`|
+|`CLOUDHELM_ENVIRONMENT`|运行环境；生产模式会强制 HTTPS 并关闭 API 文档|正式部署保持 `production`|
+|`CLOUDHELM_SESSION_MINUTES`|网页会话绝对有效期|默认 60，可设 5–1440；生产建议不超过 60|
+|`CLOUDHELM_MAX_SESSIONS_PER_USER`|单用户最大并发会话|默认 5，可设 1–20|
+|`CLOUDHELM_OAUTH_STATE_SECONDS`|企微 OAuth 临时 state 的有效秒数|默认 300，可设 60–600|
+|`CLOUDHELM_NODE_OFFLINE_SECONDS`|多久未收到 Agent 上报后判定节点离线|默认 60，可设 15–3600；应大于 Agent 上报间隔|
+|`CLOUDHELM_MAX_TASK_RESULT_BYTES`|每次容器任务结果允许保存的最大字节数|默认 262144，可设 4096–2097152|
 |`CLOUDHELM_TRUST_PROXY_HEADERS`|读取代理转发的真实 IP|仅在后端只允许可信代理访问时设为 `true`|
 |`CLOUDHELM_BIND_ADDRESS`|宿主机监听地址|保持 `127.0.0.1`|
 |`CLOUDHELM_PORT`|宿主机后端端口|默认 8080，不对公网开放|
+
+`CLOUDHELM_BIND_ADDRESS` 和 `CLOUDHELM_PORT` 由 Docker Compose 用于端口映射，其余 `CLOUDHELM_*` 变量由 Server 读取。代码还支持内部变量 `CLOUDHELM_STATIC_DIR`，其默认值指向镜像内随包安装的静态资源目录，常规部署不要设置。
 
 程序会拒绝带有 `REPLACE_ME` 的示例 Secret、生产环境 HTTP 地址以及示例域名，避免误带样例配置上线。
 
@@ -302,26 +316,37 @@ CLOUDHELM_AGENT_SERVER_URL=https://ops.company.com
 CLOUDHELM_AGENT_ENROLLMENT_TOKEN=与管理中心一致的首次注册令牌
 CLOUDHELM_AGENT_NAME=production-node-01
 CLOUDHELM_AGENT_ENVIRONMENT=production
+CLOUDHELM_AGENT_STATE_FILE=/data/agent-state.json
 CLOUDHELM_AGENT_VERIFY_TLS=true
 CLOUDHELM_AGENT_REPORT_SECONDS=15
 CLOUDHELM_AGENT_POLL_SECONDS=3
+CLOUDHELM_AGENT_REQUEST_TIMEOUT_SECONDS=20
+CLOUDHELM_AGENT_MAX_CONTAINERS=500
+CLOUDHELM_AGENT_GPU_MONITORING_ENABLED=true
+CLOUDHELM_AGENT_NVIDIA_SMI_PATH=/usr/bin/nvidia-smi
+CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS=5
+CLOUDHELM_AGENT_GPU_MAX_OUTPUT_BYTES=4194304
 ```
 
 变量说明：
 
-|变量|说明|
-|---|---|
-|`TZ`|Agent 容器系统时区，默认 `Asia/Shanghai`|
-|`CLOUDHELM_AGENT_SERVER_URL`|管理中心根地址，不带 `/api` 和结尾 `/`|
-|`CLOUDHELM_AGENT_ENROLLMENT_TOKEN`|仅首次注册使用|
-|`CLOUDHELM_AGENT_NAME`|节点显示名称，每台机器应清晰且唯一|
-|`CLOUDHELM_AGENT_ENVIRONMENT`|环境名称，例如 `production`、`testing`|
-|`CLOUDHELM_AGENT_VERIFY_TLS`|生产环境必须为 `true`|
-|`CLOUDHELM_AGENT_REPORT_SECONDS`|容器状态上报间隔|
-|`CLOUDHELM_AGENT_POLL_SECONDS`|任务轮询间隔|
-|`CLOUDHELM_AGENT_GPU_MONITORING_ENABLED`|是否探测 NVIDIA GPU；默认 `true`，非 GPU 节点可设为 `false`|
-|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH`|Agent 容器内 `nvidia-smi` 的固定路径，默认 `/usr/bin/nvidia-smi`|
-|`CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS`|单次 GPU 查询超时，默认 5 秒|
+|变量|说明|默认值/生产建议|
+|---|---|---|
+|`TZ`|Agent 容器系统时区|默认 `Asia/Shanghai`|
+|`CLOUDHELM_AGENT_SERVER_URL`|管理中心根地址|必填；使用 HTTPS，不带 `/api` 和结尾 `/`|
+|`CLOUDHELM_AGENT_ENROLLMENT_TOKEN`|Agent 首次注册的共享令牌|首次启动必填；注册成功后从文件中删除|
+|`CLOUDHELM_AGENT_NAME`|节点显示名称|默认宿主机名；每台机器应清晰且唯一|
+|`CLOUDHELM_AGENT_ENVIRONMENT`|节点所属环境|代码默认 `default`；生产节点建议明确填写 `production`|
+|`CLOUDHELM_AGENT_STATE_FILE`|节点独立凭据的容器内路径|默认 `/data/agent-state.json`，必须位于持久化挂载中|
+|`CLOUDHELM_AGENT_VERIFY_TLS`|是否校验 Server 的 HTTPS 证书|默认 `true`，生产环境必须保持开启|
+|`CLOUDHELM_AGENT_REPORT_SECONDS`|容器和 GPU 状态上报间隔|默认 15 秒，可设 5–300|
+|`CLOUDHELM_AGENT_POLL_SECONDS`|任务轮询间隔|默认 3 秒，可设 1–60|
+|`CLOUDHELM_AGENT_REQUEST_TIMEOUT_SECONDS`|访问 Server API 的单次超时|默认 20 秒，可设 3–120|
+|`CLOUDHELM_AGENT_MAX_CONTAINERS`|单节点一次最多采集的容器数量|默认 500，可设 1–2000|
+|`CLOUDHELM_AGENT_GPU_MONITORING_ENABLED`|是否探测 NVIDIA GPU|默认 `true`；非 GPU 节点可设为 `false`|
+|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH`|Agent 容器内 `nvidia-smi` 的固定路径|默认 `/usr/bin/nvidia-smi`|
+|`CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS`|单次 GPU 查询超时|默认 5 秒，可设 1–30|
+|`CLOUDHELM_AGENT_GPU_MAX_OUTPUT_BYTES`|单次 `nvidia-smi` 输出读取上限|默认 4194304 字节（4 MiB），可设 65536–16777216|
 
 先确认节点能访问管理中心，再启动：
 
@@ -512,6 +537,13 @@ openssl rand -hex 32
 TZ=Asia/Shanghai
 POSTGRES_PASSWORD=替换为随机值
 ```
+
+变量说明：
+
+|变量|说明|生产建议|
+|---|---|---|
+|`TZ`|PostgreSQL 容器系统时区|默认 `Asia/Shanghai`|
+|`POSTGRES_PASSWORD`|`cloudhelm` 数据库用户密码，同时用于 Server 数据库连接|使用 `openssl rand -hex 32` 生成，只保存在 `deploy/postgres.env`|
 
 创建 PostgreSQL 的宿主机数据目录：
 
