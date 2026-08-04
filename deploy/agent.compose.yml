@@ -12,7 +12,7 @@ services:
       - agent.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - cloudhelm-agent-state:/data
+      - ./cloudhelm-data:/data
     tmpfs:
       - /tmp:size=64m,mode=1777
     network_mode: bridge
@@ -20,6 +20,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
-volumes:
-  cloudhelm-agent-state:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

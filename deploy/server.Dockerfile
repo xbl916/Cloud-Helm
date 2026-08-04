@@ -10,10 +10,11 @@ RUN python -m pip wheel --wheel-dir /wheels ".[server]" "psycopg>=3.2,<4"
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends libpq5 \
+    && apt-get install --yes --no-install-recommends libpq5 tzdata \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system cloudhelm \
-    && useradd --system --gid cloudhelm --home-dir /app cloudhelm \
+    && groupadd --gid 10001 cloudhelm \
+    && useradd --uid 10001 --gid cloudhelm --home-dir /app \
+        --no-create-home --shell /usr/sbin/nologin cloudhelm \
     && mkdir -p /data /app && chown cloudhelm:cloudhelm /data /app
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels

@@ -15,3 +15,5 @@ build/
 release/
 agent-state/
 data/
+cloudhelm-data/
+cloudhelm-postgres-data/

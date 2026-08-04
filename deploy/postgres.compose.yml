@@ -14,6 +14,8 @@ services:
       CLOUDHELM_DATABASE_URL: postgresql+psycopg://cloudhelm:${POSTGRES_PASSWORD}@database:5432/cloudhelm
     ports:
       - "${CLOUDHELM_BIND_ADDRESS:-127.0.0.1}:${CLOUDHELM_PORT:-8080}:8080"
+    volumes:
+      - ../cloudhelm-data:/data
     tmpfs:
       - /tmp:size=64m,mode=1777
     depends_on:
@@ -32,6 +34,11 @@ services:
     networks:
       - default
       - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
   database:
     image: postgres:17-alpine
     restart: unless-stopped
@@ -42,17 +49,20 @@ services:
       POSTGRES_DB: cloudhelm
       POSTGRES_USER: cloudhelm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - cloudhelm-postgres:/var/lib/postgresql/data
+      - ./cloudhelm-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cloudhelm -d cloudhelm"]
       interval: 10s
       timeout: 5s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 networks:
   backend:
     internal: true
-
-volumes:
-  cloudhelm-postgres:

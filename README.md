@@ -144,12 +144,14 @@ getent hosts ops.company.com
 ```bash
 cp .env.example .env
 chmod 600 .env
+sudo install -d -m 0700 -o 10001 -g 10001 cloudhelm-data
 openssl rand -hex 32
 ```
 
 把随机结果写入 `CLOUDHELM_AGENT_ENROLLMENT_TOKEN`，再编辑 `.env`：
 
 ```dotenv
+TZ=Asia/Shanghai
 CLOUDHELM_AGENT_ENROLLMENT_TOKEN=替换为openssl生成的随机值
 CLOUDHELM_PUBLIC_BASE_URL=https://ops.company.com
 CLOUDHELM_WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
@@ -172,6 +174,7 @@ CLOUDHELM_PORT=8080
 
 |变量|说明|生产建议|
 |---|---|---|
+|`TZ`|容器系统时区|默认 `Asia/Shanghai`|
 |`CLOUDHELM_AGENT_ENROLLMENT_TOKEN`|Agent 首次注册的共享令牌|至少 32 字节随机值|
 |`CLOUDHELM_PUBLIC_BASE_URL`|用户实际访问的公网根地址|只包含 `https://域名`，不要带路径和结尾 `/`|
 |`CLOUDHELM_WECOM_CORP_ID`|企业 ID|从企微管理后台复制|
@@ -258,7 +261,9 @@ docker compose port server 8080
 
 输出应以 `127.0.0.1:` 开头。从另一台机器访问 `http://管理中心IP:8080` 应失败。
 
-SQLite 数据保存在 Docker volume `cloudhelm-data`，执行普通 `docker compose down` 不会删除数据。不要执行 `docker compose down -v`，否则会删除数据库 volume。
+SQLite 数据保存在发布目录的 `./cloudhelm-data/cloudhelm.db`。容器内路径仍为 `/data/cloudhelm.db`。目录固定由容器用户 `10001:10001` 写入，不要改成全员可写权限。`docker compose down` 和 `docker compose down -v` 都不会删除这个宿主机目录；删除或覆盖 `cloudhelm-data` 才会丢失数据库。
+
+所有 Compose 服务（Server、Agent 和 PostgreSQL）都使用 `json-file` 日志轮转：单文件最多 `50m`、保留 3 个文件，即每个容器最多约 `150m` Docker 日志。业务数据和数据库文件不计入该上限。
 
 ### 8. 完成首次企微登录
 
@@ -286,11 +291,13 @@ curl -i https://ops.company.com/api/v1/nodes
 cd cloudhelm-0.4.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
+install -d -m 0700 cloudhelm-data
 ```
 
 编辑 `agent.env`：
 
 ```dotenv
+TZ=Asia/Shanghai
 CLOUDHELM_AGENT_SERVER_URL=https://ops.company.com
 CLOUDHELM_AGENT_ENROLLMENT_TOKEN=与管理中心一致的首次注册令牌
 CLOUDHELM_AGENT_NAME=production-node-01
@@ -304,6 +311,7 @@ CLOUDHELM_AGENT_POLL_SECONDS=3
 
 |变量|说明|
 |---|---|
+|`TZ`|Agent 容器系统时区，默认 `Asia/Shanghai`|
 |`CLOUDHELM_AGENT_SERVER_URL`|管理中心根地址，不带 `/api` 和结尾 `/`|
 |`CLOUDHELM_AGENT_ENROLLMENT_TOKEN`|仅首次注册使用|
 |`CLOUDHELM_AGENT_NAME`|节点显示名称，每台机器应清晰且唯一|
@@ -351,14 +359,14 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml \
 
 参考：[NVIDIA Container Toolkit 安装与架构](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/)、[NVIDIA 容器环境变量](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html)、[Docker Compose GPU 支持](https://docs.docker.com/compose/how-tos/gpu-support/)。
 
-注册成功后，独立节点凭据保存在 `cloudhelm-agent-state` volume。删除 `agent.env` 中的 `CLOUDHELM_AGENT_ENROLLMENT_TOKEN` 行，然后重新创建容器：
+注册成功后，独立节点凭据保存在当前目录的 `./cloudhelm-data/agent-state.json`。删除 `agent.env` 中的 `CLOUDHELM_AGENT_ENROLLMENT_TOKEN` 行，然后重新创建容器：
 
 ```bash
 docker compose -f agent.compose.yml up -d --force-recreate
 docker compose -f agent.compose.yml logs --tail=50 agent
 ```
 
-不要删除 `cloudhelm-agent-state` volume；否则节点会丢失独立身份并请求重新注册。其余节点重复相同步骤，但应使用不同的 `CLOUDHELM_AGENT_NAME` 和正确的环境名称。
+不要删除或复制到其他节点使用 `cloudhelm-data` 目录；否则节点会丢失独立身份或复用错误身份。其余节点重复相同步骤，但应使用不同的 `CLOUDHELM_AGENT_NAME` 和正确的环境名称。
 
 ### 10. 部署验收清单
 
@@ -461,7 +469,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 ### 4. 保护企微 Secret、Agent 令牌和数据库备份
 
 - `.env` 权限保持 `600`，只允许部署账号读取；
-- 不把 `.env`、Agent 状态 volume 或数据库加入 Git、镜像和发布包；
+- 不把 `.env`、`cloudhelm-data`、Agent 状态目录或数据库加入 Git、镜像和发布包；
 - 备份应加密并限制下载权限；
 - Secret 疑似泄露时，在企微后台重置应用 Secret 并重启服务；
 - Agent 注册令牌泄露时立即轮换，核对节点列表中是否出现未知节点；
@@ -501,7 +509,14 @@ openssl rand -hex 32
 把随机值写入：
 
 ```dotenv
+TZ=Asia/Shanghai
 POSTGRES_PASSWORD=替换为随机值
+```
+
+创建 PostgreSQL 的宿主机数据目录：
+
+```bash
+install -d -m 0700 deploy/cloudhelm-postgres-data
 ```
 
 确认根目录 `.env` 中的企微和域名配置已经完成，然后启动：
@@ -517,7 +532,7 @@ docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml ps
 ```
 
-PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
+PostgreSQL 只加入内部 Docker 网络，不发布宿主机 `5432`，数据保存在 `deploy/cloudhelm-postgres-data`。`deploy/postgres.env` 已加入 `.gitignore`，仍需保持 `600` 权限，并和根目录 `.env` 一起纳入服务器 Secret 管理和加密备份。
 
 查看日志：
 
@@ -532,12 +547,12 @@ docker compose --env-file deploy/postgres.env \
 
 备份包含企微用户映射、权限、审计和会话摘要，必须按敏感数据保护。备份文件应加密、限制访问并复制到另一台受控存储设备。
 
-SQLite 默认数据位于 `cloudhelm-data` volume。为保证文件一致性，先短暂停止 Server，再备份 volume：
+SQLite 默认数据位于发布目录的 `cloudhelm-data`。为保证文件一致性，先短暂停止 Server，再备份目录：
 
 ```bash
 docker compose stop server
-docker run --rm -v cloudhelm_cloudhelm-data:/data -v "$PWD":/backup alpine \
-  tar -czf /backup/cloudhelm-data-backup.tar.gz -C /data .
+sudo tar -czf - -C cloudhelm-data . > cloudhelm-data-backup.tar.gz
+chmod 600 cloudhelm-data-backup.tar.gz
 docker compose start server
 curl --fail https://ops.company.com/healthz
 ```
@@ -558,7 +573,7 @@ test -s cloudhelm-postgres.dump
 chmod 600 cloudhelm-postgres.dump
 ```
 
-至少每月在隔离环境做一次恢复演练。不要等到故障发生时才第一次验证恢复流程，也不要在未验证备份前删除 Docker volume。
+至少每月在隔离环境做一次恢复演练。不要等到故障发生时才第一次验证恢复流程，也不要在未验证备份前删除宿主机数据目录。
 
 ## 开发、验证和发布
 

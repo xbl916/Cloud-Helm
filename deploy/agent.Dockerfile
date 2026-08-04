@@ -10,7 +10,12 @@ RUN python -m pip wheel --wheel-dir /wheels ".[agent]"
 FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-cache-dir /wheels/* && rm -rf /wheels && mkdir -p /data
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir /wheels/* \
+    && rm -rf /wheels \
+    && mkdir -p /data
 WORKDIR /app
 VOLUME ["/data"]
 CMD ["python", "-m", "cloudhelm_agent.main"]

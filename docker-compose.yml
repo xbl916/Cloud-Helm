@@ -13,7 +13,7 @@ services:
     ports:
       - "${CLOUDHELM_BIND_ADDRESS:-127.0.0.1}:${CLOUDHELM_PORT:-8080}:8080"
     volumes:
-      - cloudhelm-data:/data
+      - ./cloudhelm-data:/data
     tmpfs:
       - /tmp:size=64m,mode=1777
     healthcheck:
@@ -26,6 +26,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
-volumes:
-  cloudhelm-data:
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
