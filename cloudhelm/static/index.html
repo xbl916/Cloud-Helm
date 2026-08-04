@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#071525" />
+    <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/assets/app.css" />
+    <title>云舵 Cloud Helm</title>
+  </head>
+  <body>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <section id="login-view" class="login-view">
+      <div class="login-orbit orbit-one"></div>
+      <div class="login-orbit orbit-two"></div>
+      <main class="login-card">
+        <div class="brand-lockup">
+          <img src="/assets/logo.svg" alt="" width="52" height="52" />
+          <div><strong>云舵</strong><span>Cloud Helm</span></div>
+        </div>
+        <p class="eyebrow">CONTAINER FLEET CONSOLE</p>
+        <h1>把每一台节点，<br />握在掌心。</h1>
+        <p class="login-copy">面向企业微信 H5 的轻量容器运维控制台。</p>
+        <form id="login-form">
+          <button class="primary-button" type="submit"><span>使用企业微信登录</span><span aria-hidden="true">→</span></button>
+          <p id="login-error" class="form-error"></p>
+        </form>
+        <p class="secure-note"><span>●</span> 仅允许已绑定的企业微信成员访问</p>
+      </main>
+    </section>
+
+    <div id="app-view" class="app-view hidden">
+      <header class="app-header">
+        <div class="mini-brand"><img src="/assets/logo.svg" alt="" /><span>云舵</span></div>
+        <div class="header-actions">
+          <button id="refresh-button" class="icon-button" aria-label="刷新">↻</button>
+          <button id="avatar-button" class="avatar" aria-label="我的账号">云</button>
+        </div>
+      </header>
+
+      <main class="app-content">
+        <section id="page-overview" class="page active">
+          <div class="welcome-row">
+            <div><p class="eyebrow">FLEET OVERVIEW</p><h1><span id="greeting">早上好</span>，<span id="display-name">管理员</span></h1></div>
+            <div id="fleet-status" class="fleet-badge"><i></i><span>正在同步</span></div>
+          </div>
+          <div class="hero-panel">
+            <div class="hero-copy"><span>在线节点</span><strong id="online-nodes">—</strong><small id="node-caption">等待节点上报</small></div>
+            <div class="radar" aria-hidden="true"><i></i><i></i><i></i><b></b></div>
+          </div>
+          <div class="metrics-grid">
+            <article><span class="metric-icon cyan">▣</span><div><strong id="running-containers">—</strong><span>运行中容器</span></div></article>
+            <article><span class="metric-icon amber">!</span><div><strong id="stopped-containers">—</strong><span>停止 / 异常</span></div></article>
+          </div>
+          <div class="section-heading"><div><p class="eyebrow">NODES</p><h2>节点状态</h2></div><button data-nav="nodes">查看全部</button></div>
+          <div id="overview-nodes" class="node-list skeleton-list"><div class="skeleton"></div><div class="skeleton"></div></div>
+        </section>
+
+        <section id="page-nodes" class="page">
+          <div class="page-title"><p class="eyebrow">INFRASTRUCTURE</p><h1>全部节点</h1><p>Agent 主动连接，无需暴露 Docker API。</p></div>
+          <div class="search-box"><span>⌕</span><input id="node-search" placeholder="搜索节点、主机名或环境" /></div>
+          <div id="environment-filters" class="filter-row"></div>
+          <div id="all-nodes" class="node-list"></div>
+        </section>
+
+        <section id="page-audit" class="page">
+          <div class="page-title"><p class="eyebrow">AUDIT TRAIL</p><h1>操作审计</h1><p>关键操作留痕，结果可追溯。</p></div>
+          <div id="audit-list" class="timeline"></div>
+        </section>
+
+        <section id="page-profile" class="page">
+          <div class="page-title"><p class="eyebrow">ACCOUNT</p><h1>我的账号</h1></div>
+          <article class="profile-card"><div id="profile-avatar" class="large-avatar">云</div><div><strong id="profile-name">系统管理员</strong><span id="profile-role">管理员</span></div></article>
+          <div class="settings-card">
+            <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
+            <div><span>节点通信</span><strong>独立令牌</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.3.0</strong></div>
+          </div>
+          <section id="admin-users" class="admin-users hidden">
+            <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
+            <div id="user-list" class="user-list"></div>
+          </section>
+          <button id="logout-button" class="danger-outline">退出登录</button>
+        </section>
+
+        <section id="page-containers" class="page">
+          <button id="containers-back" class="back-button">← 返回节点</button>
+          <div id="container-node-title" class="page-title compact"></div>
+          <div id="project-groups"></div>
+        </section>
+      </main>
+
+      <nav class="tab-bar" aria-label="主导航">
+        <button class="active" data-nav="overview"><span>⌂</span><b>总览</b></button>
+        <button data-nav="nodes"><span>◇</span><b>节点</b></button>
+        <button data-nav="audit"><span>≡</span><b>审计</b></button>
+        <button data-nav="profile"><span>○</span><b>我的</b></button>
+      </nav>
+    </div>
+
+    <div id="container-sheet" class="sheet-backdrop hidden" role="dialog" aria-modal="true">
+      <section class="bottom-sheet">
+        <button class="sheet-close" data-close-sheet aria-label="关闭">×</button>
+        <div id="container-detail"></div>
+      </section>
+    </div>
+
+    <div id="confirm-dialog" class="dialog-backdrop hidden" role="alertdialog" aria-modal="true">
+      <section class="confirm-card"><span class="warning-mark">!</span><h2 id="confirm-title">确认操作？</h2><p id="confirm-copy"></p><div><button data-cancel>取消</button><button id="confirm-action" class="danger-button">确认</button></div></section>
+    </div>
+
+    <div id="logs-dialog" class="logs-backdrop hidden" role="dialog" aria-modal="true">
+      <section class="logs-panel"><header><div><p>CONTAINER LOGS</p><strong id="logs-title">日志</strong></div><button data-close-logs>×</button></header><pre id="logs-content">正在读取…</pre><footer><span id="logs-status">等待 Agent 返回</span><button id="logs-refresh">刷新</button></footer></section>
+    </div>
+    <div id="user-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true">
+      <form id="user-form" class="user-form">
+        <div class="form-heading"><div><p class="eyebrow">NEW ACCOUNT</p><h2>添加用户</h2></div><button type="button" data-close-user>×</button></div>
+        <label>企业微信 UserId<input name="wecom_userid" required maxlength="128" autocomplete="off" placeholder="必须与企微后台完全一致" /></label>
+        <label>显示名称<input name="display_name" required maxlength="120" placeholder="例如 张三" /></label>
+        <label>角色<select name="role"><option value="viewer">只读：状态和日志</option><option value="operator">运维：可启停和重启</option><option value="admin">管理员：全部权限</option></select></label>
+        <p id="user-form-error" class="form-error"></p>
+        <button class="primary-button" type="submit"><span>创建账号</span><span>→</span></button>
+      </form>
+    </div>
+    <div id="access-dialog" class="access-backdrop hidden" role="dialog" aria-modal="true">
+      <section class="access-panel">
+        <header><div><p class="eyebrow">RESOURCE ACCESS</p><h2 id="access-title">资源权限</h2></div><button type="button" data-close-access>×</button></header>
+        <label class="access-mode-label">可见范围<select id="access-mode"><option value="global">全部资源（沿用角色权限）</option><option value="restricted">自定义资源范围</option></select></label>
+        <p id="access-hint" class="access-hint">全部资源模式保持原有角色权限。</p>
+        <div id="access-tree" class="access-tree hidden"></div>
+        <p id="access-error" class="form-error"></p>
+        <footer><button type="button" data-close-access>取消</button><button id="save-access-button" class="primary-small">保存权限</button></footer>
+      </section>
+    </div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

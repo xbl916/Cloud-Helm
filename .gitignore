@@ -1,0 +1,17 @@
+.env
+deploy/agent.env
+deploy/postgres.env
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite3
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+release/
+agent-state/
+data/

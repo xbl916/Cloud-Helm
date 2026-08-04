@@ -1,0 +1,31 @@
+name: cloudhelm
+services:
+  server:
+    build:
+      context: .
+      dockerfile: deploy/server.Dockerfile
+    image: cloudhelm/server:0.3.0
+    restart: unless-stopped
+    init: true
+    read_only: true
+    env_file:
+      - .env
+    ports:
+      - "${CLOUDHELM_BIND_ADDRESS:-127.0.0.1}:${CLOUDHELM_PORT:-8080}:8080"
+    volumes:
+      - cloudhelm-data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  cloudhelm-data:

@@ -1,0 +1,25 @@
+name: cloudhelm-agent
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/agent.Dockerfile
+    image: cloudhelm/agent:0.3.0
+    restart: unless-stopped
+    init: true
+    read_only: true
+    env_file:
+      - agent.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - cloudhelm-agent-state:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    network_mode: bridge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  cloudhelm-agent-state:

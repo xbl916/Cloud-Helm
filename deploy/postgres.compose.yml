@@ -1,0 +1,58 @@
+name: cloudhelm
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/server.Dockerfile
+    image: cloudhelm/server:0.3.0
+    restart: unless-stopped
+    init: true
+    read_only: true
+    env_file:
+      - ../.env
+    environment:
+      CLOUDHELM_DATABASE_URL: postgresql+psycopg://cloudhelm:${POSTGRES_PASSWORD}@database:5432/cloudhelm
+    ports:
+      - "${CLOUDHELM_BIND_ADDRESS:-127.0.0.1}:${CLOUDHELM_PORT:-8080}:8080"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - default
+      - backend
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    init: true
+    networks:
+      - backend
+    environment:
+      POSTGRES_DB: cloudhelm
+      POSTGRES_USER: cloudhelm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - cloudhelm-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudhelm -d cloudhelm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  backend:
+    internal: true
+
+volumes:
+  cloudhelm-postgres:
