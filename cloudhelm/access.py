@@ -76,6 +76,18 @@ def can_access(
     )
 
 
+def can_view_node_metrics(user: User, rules: list[AccessRule], node: Node) -> bool:
+    """Keep host-wide metrics out of container-only permission scopes."""
+    if user.role == UserRole.admin or not user.resource_restricted:
+        return True
+    return any(
+        rule.can_view
+        and rule.scope_type in {"all", "environment", "node"}
+        and _rule_matches(rule, node)
+        for rule in rules
+    )
+
+
 def visible_inventory(
     db: Session, user: User
 ) -> tuple[list[Node], list[Container], list[AccessRule]]:

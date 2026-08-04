@@ -12,7 +12,7 @@ def test_agent_inventory_and_task_flow(
             "name": "生产节点一",
             "hostname": "prod-01",
             "environment": "production",
-            "agent_version": "0.3.0",
+            "agent_version": "0.4.0",
         },
     )
     assert enroll.status_code == 200
@@ -27,9 +27,36 @@ def test_agent_inventory_and_task_flow(
         headers=agent_headers,
         json={
             "hostname": "prod-01",
-            "agent_version": "0.3.0",
+            "agent_version": "0.4.0",
             "docker_version": "28.0.0",
             "os": "Linux / x86_64",
+            "gpu_status": "ok",
+            "gpus": [
+                {
+                    "index": 0,
+                    "uuid": "GPU-12345678",
+                    "name": "NVIDIA RTX 6000 Ada Generation",
+                    "driver_version": "570.124.06",
+                    "cuda_version": "12.8",
+                    "utilization_gpu": 40.0,
+                    "utilization_memory": 10.0,
+                    "memory_used_mib": 2048,
+                    "memory_total_mib": 49140,
+                    "temperature_c": 54.0,
+                    "power_draw_w": 112.45,
+                    "power_limit_w": 300.0,
+                },
+                {
+                    "index": 1,
+                    "uuid": "GPU-hidden",
+                    "name": "NVIDIA L4",
+                    "driver_version": "570.124.06",
+                    "cuda_version": "12.8",
+                    "utilization_gpu": 20.0,
+                    "memory_used_mib": 1024,
+                    "memory_total_mib": 23034,
+                },
+            ],
             "containers": [
                 {
                     "docker_id": "1234567890abcdef",
@@ -42,6 +69,7 @@ def test_agent_inventory_and_task_flow(
                     "memory_usage": 104857600,
                     "memory_limit": 536870912,
                     "memory_percent": 19.53,
+                    "gpu_devices": ["0"],
                 },
                 {
                     "docker_id": "abcdef1234567890",
@@ -54,6 +82,7 @@ def test_agent_inventory_and_task_flow(
                     "memory_usage": 209715200,
                     "memory_limit": 1073741824,
                     "memory_percent": 19.53,
+                    "gpu_devices": ["1"],
                 },
             ],
         },
@@ -64,6 +93,18 @@ def test_agent_inventory_and_task_flow(
     assert nodes.status_code == 200
     assert nodes.json()[0]["online"] is True
     assert nodes.json()[0]["container_count"] == 2
+    assert nodes.json()[0]["gpu_status"] == "ok"
+    assert nodes.json()[0]["gpus"][0]["uuid"] == "GPU-12345678"
+
+    dashboard = client.get("/api/v1/dashboard", headers=admin_headers)
+    assert dashboard.status_code == 200
+    assert dashboard.json()["gpus"] == {
+        "total": 2,
+        "active": 2,
+        "average_utilization": 30.0,
+        "memory_used_mib": 3072,
+        "memory_total_mib": 72174,
+    }
 
     containers = client.get(
         f"/api/v1/nodes/{credentials['node_id']}/containers", headers=admin_headers
@@ -75,6 +116,8 @@ def test_agent_inventory_and_task_flow(
         item for item in containers.json() if item["name"] == "internal-db"
     )
     assert container["compose_project"] == "web"
+    assert container["gpu_devices"] == ["0"]
+    assert container["gpu_all"] is False
 
     queued = client.post(
         f"/api/v1/containers/{container['id']}/actions",
@@ -138,6 +181,16 @@ def test_agent_inventory_and_task_flow(
     viewer_nodes = client.get("/api/v1/nodes", headers=viewer_headers)
     assert viewer_nodes.status_code == 200
     assert viewer_nodes.json()[0]["container_count"] == 1
+    assert viewer_nodes.json()[0]["gpu_status"] == "ok"
+    assert [gpu["uuid"] for gpu in viewer_nodes.json()[0]["gpus"]] == ["GPU-12345678"]
+    viewer_dashboard = client.get("/api/v1/dashboard", headers=viewer_headers)
+    assert viewer_dashboard.json()["gpus"]["total"] == 1
+    viewer_container = client.get(
+        f"/api/v1/containers/{container['id']}", headers=viewer_headers
+    )
+    assert [gpu["uuid"] for gpu in viewer_container.json()["assigned_gpus"]] == [
+        "GPU-12345678"
+    ]
     viewer_containers = client.get(
         f"/api/v1/nodes/{credentials['node_id']}/containers", headers=viewer_headers
     )

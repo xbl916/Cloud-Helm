@@ -4,7 +4,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/server.Dockerfile
-    image: cloudhelm/server:0.3.0
+    image: cloudhelm/server:0.4.0
     restart: unless-stopped
     init: true
     read_only: true

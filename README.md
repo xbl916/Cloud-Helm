@@ -2,12 +2,13 @@
 
 云舵是面向企业微信 H5 的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.3.0`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.4.0`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
+- [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [人员与容器权限](#人员与容器权限)
 - [实际使用中的安全注意事项](#实际使用中的安全注意事项)
 - [PostgreSQL 部署](#postgresql-部署)
@@ -62,6 +63,8 @@ Docker Engine
 - 能挂载本机 `/var/run/docker.sock`；
 - 不需要任何公网入站端口。
 
+需要 GPU 监控的 NVIDIA 节点还应安装 NVIDIA 驱动和 NVIDIA Container Toolkit，并确保宿主机运行 `nvidia-smi` 正常。Agent 只需要 Toolkit 提供的 `utility` 驱动能力，不需要在 Agent 镜像内安装完整 CUDA 工具链。
+
 检查 Docker：
 
 ```bash
@@ -88,15 +91,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.3.0.tar.gz.sha256
-tar -xzf cloudhelm-0.3.0.tar.gz
-cd cloudhelm-0.3.0
+sha256sum -c cloudhelm-0.4.0.tar.gz.sha256
+tar -xzf cloudhelm-0.4.0.tar.gz
+cd cloudhelm-0.4.0
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.3.0.tar.gz: OK
+cloudhelm-0.4.0.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -280,7 +283,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.3.0/deploy
+cd cloudhelm-0.4.0/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 ```
@@ -308,6 +311,9 @@ CLOUDHELM_AGENT_POLL_SECONDS=3
 |`CLOUDHELM_AGENT_VERIFY_TLS`|生产环境必须为 `true`|
 |`CLOUDHELM_AGENT_REPORT_SECONDS`|容器状态上报间隔|
 |`CLOUDHELM_AGENT_POLL_SECONDS`|任务轮询间隔|
+|`CLOUDHELM_AGENT_GPU_MONITORING_ENABLED`|是否探测 NVIDIA GPU；默认 `true`，非 GPU 节点可设为 `false`|
+|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH`|Agent 容器内 `nvidia-smi` 的固定路径，默认 `/usr/bin/nvidia-smi`|
+|`CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS`|单次 GPU 查询超时，默认 5 秒|
 
 先确认节点能访问管理中心，再启动：
 
@@ -321,6 +327,29 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 ```
 
 首次成功日志应包含节点已注册以及容器数量已上报。回到云舵页面，节点应在一个上报周期内显示为在线。
+
+#### NVIDIA GPU 节点启动方式
+
+普通节点继续只使用 `agent.compose.yml`。NVIDIA 节点必须把 GPU overlay 一起传给每条 Compose 命令：
+
+```bash
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml config
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml build --pull
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-smi
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
+```
+
+最后两条命令应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。overlay 为 Agent 保留全部 NVIDIA GPU，且只设置 `NVIDIA_DRIVER_CAPABILITIES=utility`，用于 `nvidia-smi`/NVML 查询。若 `config` 阶段报 GPU device reservation 错误，先确认 Docker Compose v2 和 NVIDIA Container Toolkit 已正确安装、Docker daemon 已重启。
+
+注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
+
+```bash
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml \
+  up -d --force-recreate
+```
+
+参考：[NVIDIA Container Toolkit 安装与架构](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/)、[NVIDIA 容器环境变量](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html)、[Docker Compose GPU 支持](https://docs.docker.com/compose/how-tos/gpu-support/)。
 
 注册成功后，独立节点凭据保存在 `cloudhelm-agent-state` volume。删除 `agent.env` 中的 `CLOUDHELM_AGENT_ENROLLMENT_TOKEN` 行，然后重新创建容器：
 
@@ -341,6 +370,7 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 - 新建普通用户在未授权时看不到任何节点；
 - 只读用户不能执行容器启停；
 - Agent 页面状态正常，日志中没有持续认证或 TLS 错误；
+- NVIDIA 节点的 Agent 容器内 `nvidia-smi` 正常，页面显示的型号、显存和数量与宿主机一致；
 - 执行一次测试容器日志读取，并确认审计页面有记录；
 - 已创建第二位管理员并完成首次数据库备份。
 
@@ -358,6 +388,8 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 |Agent 出现 TLS 错误|证书链和域名是否正确；不要通过关闭 TLS 校验绕过|
 |节点注册但没有容器|Docker Socket 是否正确挂载，Agent 是否有读取 socket 的权限|
 |节点持续离线|节点到管理中心 443 是否可达，系统时间是否准确，查看 Agent 日志|
+|宿主机可运行 `nvidia-smi`，页面却提示 GPU 不可用|启动 Agent 时是否同时使用 `agent.gpu.compose.yml`，Toolkit 是否已配置给 Docker，容器内 `nvidia-smi` 是否正常|
+|页面有 GPU，但某容器显示未分配|Docker inspect 的 `HostConfig.DeviceRequests` 是否包含 NVIDIA GPU；旧式 runtime 则检查 `NVIDIA_VISIBLE_DEVICES`|
 
 排查命令：
 
@@ -369,6 +401,22 @@ docker compose -f deploy/agent.compose.yml logs --tail=200 agent
 ```
 
 不要把包含企微 Secret、完整 Cookie、Agent Token 或 OAuth `code` 的日志直接发送给他人。
+
+## NVIDIA GPU 监控
+
+GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi -q -x`，不拼接用户输入，也不经过 shell；查询默认 5 秒超时并限制 XML 输出大小。Server 只保存经过字段白名单解析后的指标，不保存 `nvidia-smi` 原始输出。
+
+当前页面可查看：
+
+- 节点 GPU 数量、型号、UUID、驱动和 CUDA 版本；
+- GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
+- Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
+
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。节点指标是上报时刻的快照，当前版本不保存历史曲线，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+
+主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
+
+字段语义参考 [NVIDIA `nvidia-smi` 官方文档](https://docs.nvidia.com/deploy/nvidia-smi/index.html)。
 
 ## 人员与容器权限
 
@@ -518,7 +566,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.3.0
+bash scripts/package-release.sh 0.4.0
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥；目标设备会为自身 CPU 架构构建 Server 与 Agent 镜像。

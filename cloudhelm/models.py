@@ -110,6 +110,12 @@ class Node(Base):
     docker_version: Mapped[str] = mapped_column(String(80), default="unknown")
     os: Mapped[str] = mapped_column(String(120), default="unknown")
     labels_json: Mapped[str] = mapped_column(Text, default="{}")
+    gpus_json: Mapped[str] = mapped_column(Text, default="[]")
+    gpu_status: Mapped[str] = mapped_column(String(20), default="unavailable")
+    gpu_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gpu_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
@@ -144,6 +150,8 @@ class Container(Base):
     started_at: Mapped[str | None] = mapped_column(String(60), nullable=True)
     ports_json: Mapped[str] = mapped_column(Text, default="{}")
     labels_json: Mapped[str] = mapped_column(Text, default="{}")
+    gpu_devices_json: Mapped[str] = mapped_column(Text, default="[]")
+    gpu_all: Mapped[bool] = mapped_column(Boolean, default=False)
     present: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True

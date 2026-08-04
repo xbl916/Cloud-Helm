@@ -1,4 +1,4 @@
-from cloudhelm.access import can_access
+from cloudhelm.access import can_access, can_view_node_metrics
 from cloudhelm.models import AccessRule, Container, Node, User, UserRole
 
 
@@ -63,3 +63,23 @@ def test_project_rule_grants_only_selected_project():
         compose_project="database",
     )
     assert not can_access(operator, [rule], node, other, "view")
+    assert not can_view_node_metrics(operator, [rule], node)
+
+
+def test_node_rule_grants_host_metrics():
+    node, _ = inventory()
+    viewer = User(
+        id="viewer-2",
+        username="node-viewer",
+        wecom_userid="node-viewer",
+        display_name="Node Viewer",
+        role=UserRole.viewer,
+        resource_restricted=True,
+    )
+    rule = AccessRule(
+        user_id=viewer.id,
+        scope_type="node",
+        node_id=node.id,
+        can_view=True,
+    )
+    assert can_view_node_metrics(viewer, [rule], node)

@@ -18,6 +18,10 @@ class AgentSettings(BaseSettings):
     request_timeout_seconds: float = Field(default=20.0, ge=3, le=120)
     verify_tls: bool = True
     max_containers: int = Field(default=500, ge=1, le=2000)
+    gpu_monitoring_enabled: bool = True
+    nvidia_smi_path: Path = Path("/usr/bin/nvidia-smi")
+    gpu_query_timeout_seconds: float = Field(default=5.0, ge=1, le=30)
+    gpu_max_output_bytes: int = Field(default=4194304, ge=65536, le=16777216)
 
     @property
     def api_url(self) -> str:

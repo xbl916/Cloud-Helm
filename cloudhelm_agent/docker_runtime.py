@@ -41,6 +41,7 @@ class DockerRuntime:
             elif container.image.id:
                 image = container.image.id.split(":")[-1][:12]
             health = (state.get("Health") or {}).get("Status")
+            gpu_devices, gpu_all = self._gpu_allocation(attrs)
             result.append(
                 {
                     "docker_id": container.id,
@@ -56,6 +57,8 @@ class DockerRuntime:
                     "memory_percent": round(memory_percent, 2),
                     "started_at": state.get("StartedAt"),
                     "ports": attrs.get("NetworkSettings", {}).get("Ports") or {},
+                    "gpu_devices": gpu_devices,
+                    "gpu_all": gpu_all,
                     "labels": {
                         key: str(value)
                         for key, value in labels.items()
@@ -64,6 +67,55 @@ class DockerRuntime:
                 }
             )
         return result
+
+    @staticmethod
+    def _gpu_allocation(attrs: dict[str, Any]) -> tuple[list[str], bool]:
+        host_config = attrs.get("HostConfig") or {}
+        requests = host_config.get("DeviceRequests") or []
+        devices: set[str] = set()
+        all_gpus = False
+        matched_request = False
+        for request in requests:
+            driver = str(request.get("Driver") or "").lower()
+            capabilities = {
+                str(capability).lower()
+                for group in (request.get("Capabilities") or [])
+                for capability in (group or [])
+            }
+            if driver not in {"", "nvidia"} or "gpu" not in capabilities:
+                continue
+            matched_request = True
+            device_ids = request.get("DeviceIDs") or []
+            if device_ids:
+                devices.update(str(device) for device in device_ids)
+            else:
+                try:
+                    count = int(request.get("Count") or 0)
+                except (TypeError, ValueError):
+                    count = 0
+                if count == -1:
+                    all_gpus = True
+                elif count > 0:
+                    devices.add(f"count:{count}")
+
+        uses_nvidia_runtime = str(host_config.get("Runtime") or "").lower() == "nvidia"
+        if not matched_request and uses_nvidia_runtime:
+            environment = attrs.get("Config", {}).get("Env") or []
+            visible = next(
+                (
+                    item.split("=", 1)[1]
+                    for item in environment
+                    if item.startswith("NVIDIA_VISIBLE_DEVICES=")
+                ),
+                "",
+            ).strip()
+            if visible.lower() == "all":
+                all_gpus = True
+            elif visible.lower() not in {"", "none", "void"}:
+                devices.update(
+                    item.strip() for item in visible.split(",") if item.strip()
+                )
+        return sorted(devices), all_gpus
 
     @staticmethod
     def _cpu_percent(stats: dict[str, Any]) -> float:

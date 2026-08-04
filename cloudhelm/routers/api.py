@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import delete, select
 
-from cloudhelm.access import can_access, load_access_rules, visible_inventory
+from cloudhelm.access import (
+    can_access,
+    can_view_node_metrics,
+    load_access_rules,
+    visible_inventory,
+)
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
 from cloudhelm.models import (
@@ -46,14 +51,77 @@ def _node_online(node: Node, offline_seconds: int) -> bool:
     return (datetime.now(UTC) - last_seen).total_seconds() <= offline_seconds
 
 
+def _node_gpus(node: Node) -> list[dict]:
+    try:
+        value = json.loads(node.gpus_json or "[]")
+        return value if isinstance(value, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _container_gpu_devices(container: Container) -> list[str]:
+    try:
+        value = json.loads(container.gpu_devices_json or "[]")
+        return [str(item) for item in value] if isinstance(value, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _container_has_gpu(container: Container) -> bool:
+    return container.gpu_all or bool(_container_gpu_devices(container))
+
+
+def _assigned_gpus(node: Node, containers: list[Container]) -> list[dict]:
+    gpus = _node_gpus(node)
+    if any(item.gpu_all for item in containers):
+        return gpus
+    device_ids = {
+        device
+        for item in containers
+        for device in _container_gpu_devices(item)
+        if not device.startswith("count:")
+    }
+    return [
+        gpu
+        for gpu in gpus
+        if str(gpu.get("index")) in device_ids or gpu.get("uuid") in device_ids
+    ]
+
+
+def _visible_node_gpus(
+    user: User,
+    rules: list[AccessRule],
+    node: Node,
+    visible_containers: list[Container],
+) -> list[dict]:
+    if can_view_node_metrics(user, rules, node):
+        return _node_gpus(node)
+    return _assigned_gpus(node, visible_containers)
+
+
 @router.get("/dashboard")
 def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
-    nodes, containers, _ = visible_inventory(db, user)
+    nodes, containers, rules = visible_inventory(db, user)
     online_nodes = sum(
         _node_online(node, settings.node_offline_seconds) for node in nodes
     )
     running = sum(item.status == "running" for item in containers)
     unhealthy = sum(item.health == "unhealthy" for item in containers)
+    gpus = [
+        gpu
+        for node in nodes
+        for gpu in _visible_node_gpus(
+            user,
+            rules,
+            node,
+            [item for item in containers if item.node_id == node.id],
+        )
+    ]
+    gpu_utilization = [
+        float(gpu["utilization_gpu"])
+        for gpu in gpus
+        if gpu.get("utilization_gpu") is not None
+    ]
     return {
         "nodes": {
             "total": len(nodes),
@@ -66,34 +134,60 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
             "stopped": len(containers) - running,
             "unhealthy": unhealthy,
         },
+        "gpus": {
+            "total": len(gpus),
+            "active": sum(value > 0 for value in gpu_utilization),
+            "average_utilization": round(sum(gpu_utilization) / len(gpu_utilization), 2)
+            if gpu_utilization
+            else 0.0,
+            "memory_used_mib": sum(
+                int(gpu.get("memory_used_mib") or 0) for gpu in gpus
+            ),
+            "memory_total_mib": sum(
+                int(gpu.get("memory_total_mib") or 0) for gpu in gpus
+            ),
+        },
     }
 
 
 @router.get("/nodes")
 def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
-    nodes, containers, _ = visible_inventory(db, user)
+    nodes, containers, rules = visible_inventory(db, user)
     counts: dict[str, int] = {}
     running: dict[str, int] = {}
     for item in containers:
         counts[item.node_id] = counts.get(item.node_id, 0) + 1
         if item.status == "running":
             running[item.node_id] = running.get(item.node_id, 0) + 1
-    return [
-        {
-            "id": node.id,
-            "name": node.name,
-            "hostname": node.hostname,
-            "environment": node.environment,
-            "online": _node_online(node, settings.node_offline_seconds),
-            "last_seen_at": _iso(node.last_seen_at),
-            "agent_version": node.agent_version,
-            "docker_version": node.docker_version,
-            "os": node.os,
-            "container_count": counts.get(node.id, 0),
-            "running_count": running.get(node.id, 0),
-        }
-        for node in nodes
-    ]
+    result = []
+    for node in nodes:
+        node_containers = [item for item in containers if item.node_id == node.id]
+        metrics_visible = can_view_node_metrics(user, rules, node) or any(
+            _container_has_gpu(item) for item in node_containers
+        )
+        gpus = _visible_node_gpus(user, rules, node, node_containers)
+        result.append(
+            {
+                "id": node.id,
+                "name": node.name,
+                "hostname": node.hostname,
+                "environment": node.environment,
+                "online": _node_online(node, settings.node_offline_seconds),
+                "last_seen_at": _iso(node.last_seen_at),
+                "agent_version": node.agent_version,
+                "docker_version": node.docker_version,
+                "os": node.os,
+                "gpu_status": node.gpu_status if metrics_visible else "restricted",
+                "gpu_error": node.gpu_error if metrics_visible else None,
+                "gpu_updated_at": _iso(node.gpu_updated_at)
+                if metrics_visible
+                else None,
+                "gpus": gpus,
+                "container_count": counts.get(node.id, 0),
+                "running_count": running.get(node.id, 0),
+            }
+        )
+    return result
 
 
 @router.get("/nodes/{node_id}/containers")
@@ -124,6 +218,7 @@ def get_container(container_id: str, db: Db, user: CurrentUser) -> dict:
         raise HTTPException(status_code=404, detail="容器不存在")
     result = _container_dict(item)
     result["node_name"] = node.name if node else "未知节点"
+    result["assigned_gpus"] = _assigned_gpus(node, [item])
     result["permissions"] = {
         "view": True,
         "logs": can_access(user, rules, node, item, "logs"),
@@ -149,6 +244,8 @@ def _container_dict(item: Container) -> dict:
         "memory_percent": round(item.memory_percent, 2),
         "started_at": item.started_at,
         "ports": json.loads(item.ports_json or "{}"),
+        "gpu_devices": _container_gpu_devices(item),
+        "gpu_all": item.gpu_all,
         "updated_at": _iso(item.updated_at),
     }
 

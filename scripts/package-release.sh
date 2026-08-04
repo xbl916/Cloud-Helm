@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-version="${1:-0.3.0}"
+version="${1:-0.4.0}"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 release_root="$project_root/release"
 stage_dir="$release_root/cloudhelm-$version"

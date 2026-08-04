@@ -67,6 +67,14 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
     node.agent_version = payload.agent_version
     node.docker_version = payload.docker_version
     node.os = payload.os
+    node.gpu_status = payload.gpu_status
+    node.gpu_error = payload.gpu_error
+    node.gpus_json = json.dumps(
+        [gpu.model_dump() for gpu in payload.gpus],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    node.gpu_updated_at = now
     node.last_seen_at = now
 
     db.execute(
@@ -102,6 +110,10 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
         item.labels_json = json.dumps(
             snapshot.labels, ensure_ascii=False, separators=(",", ":")
         )
+        item.gpu_devices_json = json.dumps(
+            snapshot.gpu_devices, ensure_ascii=False, separators=(",", ":")
+        )
+        item.gpu_all = snapshot.gpu_all
         item.present = True
         item.updated_at = now
     db.commit()

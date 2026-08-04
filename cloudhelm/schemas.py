@@ -92,6 +92,25 @@ class ContainerSnapshot(BaseModel):
     started_at: str | None = Field(default=None, max_length=60)
     ports: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
+    gpu_devices: list[str] = Field(default_factory=list, max_length=128)
+    gpu_all: bool = False
+
+
+class GpuSnapshot(BaseModel):
+    index: int = Field(ge=0, le=1024)
+    uuid: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=255)
+    driver_version: str = Field(default="unknown", max_length=80)
+    cuda_version: str | None = Field(default=None, max_length=40)
+    utilization_gpu: float | None = Field(default=None, ge=0, le=100)
+    utilization_memory: float | None = Field(default=None, ge=0, le=100)
+    memory_used_mib: int | None = Field(default=None, ge=0)
+    memory_total_mib: int | None = Field(default=None, ge=0)
+    temperature_c: float | None = Field(default=None, ge=-100, le=300)
+    power_draw_w: float | None = Field(default=None, ge=0, le=100000)
+    power_limit_w: float | None = Field(default=None, ge=0, le=100000)
+    fan_speed_percent: float | None = Field(default=None, ge=0, le=10000)
+    mig_mode: str | None = Field(default=None, max_length=40)
 
 
 class HeartbeatRequest(BaseModel):
@@ -99,6 +118,9 @@ class HeartbeatRequest(BaseModel):
     agent_version: str = Field(default="unknown", max_length=30)
     docker_version: str = Field(default="unknown", max_length=80)
     os: str = Field(default="unknown", max_length=120)
+    gpu_status: Literal["ok", "unavailable", "error", "disabled"] = "unavailable"
+    gpu_error: str | None = Field(default=None, max_length=500)
+    gpus: list[GpuSnapshot] = Field(default_factory=list, max_length=128)
     containers: list[ContainerSnapshot] = Field(default_factory=list, max_length=2000)
 
 

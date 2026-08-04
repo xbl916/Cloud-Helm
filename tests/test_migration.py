@@ -11,3 +11,9 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
     assert "wecom_userid" in user_columns
     assert "password_hash" not in user_columns
     assert {"web_sessions", "oauth_states"}.issubset(inspector.get_table_names())
+    node_columns = {item["name"] for item in inspector.get_columns("nodes")}
+    assert {"gpus_json", "gpu_status", "gpu_error", "gpu_updated_at"}.issubset(
+        node_columns
+    )
+    container_columns = {item["name"] for item in inspector.get_columns("containers")}
+    assert {"gpu_devices_json", "gpu_all"}.issubset(container_columns)

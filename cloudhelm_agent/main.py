@@ -12,6 +12,7 @@ import httpx
 from cloudhelm_agent import __version__
 from cloudhelm_agent.config import AgentSettings
 from cloudhelm_agent.docker_runtime import DockerRuntime
+from cloudhelm_agent.gpu_monitor import GpuMonitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,6 +25,12 @@ class Agent:
     def __init__(self, settings: AgentSettings):
         self.settings = settings
         self.runtime = DockerRuntime(settings.max_containers)
+        self.gpu_monitor = GpuMonitor(
+            enabled=settings.gpu_monitoring_enabled,
+            executable=settings.nvidia_smi_path,
+            timeout_seconds=settings.gpu_query_timeout_seconds,
+            max_output_bytes=settings.gpu_max_output_bytes,
+        )
         self.stop_event = Event()
         self.state = self._load_state()
         self.client = httpx.Client(
@@ -87,11 +94,15 @@ class Agent:
 
     def report(self) -> None:
         runtime_info = self.runtime.info()
+        gpu = self.gpu_monitor.snapshot()
         payload = {
             "hostname": socket.gethostname(),
             "agent_version": __version__,
             "docker_version": runtime_info["docker_version"],
             "os": runtime_info.get("os") or platform.platform(),
+            "gpu_status": gpu.status,
+            "gpu_error": gpu.error,
+            "gpus": gpu.gpus,
             "containers": self.runtime.inventory(),
         }
         response = self.client.post(
@@ -99,6 +110,10 @@ class Agent:
         )
         response.raise_for_status()
         logger.info("Reported %d containers", len(payload["containers"]))
+        if gpu.status == "ok":
+            logger.info("Reported %d NVIDIA GPUs", len(gpu.gpus))
+        elif gpu.status == "error":
+            logger.warning("GPU monitoring failed: %s", gpu.error)
 
     def poll_task(self) -> None:
         response = self.client.get("/agent/tasks/next", headers=self._headers())
