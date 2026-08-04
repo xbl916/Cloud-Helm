@@ -4,3 +4,6 @@
 !cloudhelm/**
 !cloudhelm_agent/
 !cloudhelm_agent/**
+!deploy/
+!deploy/server-entrypoint.sh
+!deploy/agent-entrypoint.sh

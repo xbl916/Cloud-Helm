@@ -35,6 +35,12 @@ def test_container_entrypoints_are_valid_shell(script):
     assert completed.returncode == 0, completed.stderr
 
 
+def test_container_entrypoints_are_included_in_docker_context():
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    assert "!deploy/server-entrypoint.sh" in dockerignore
+    assert "!deploy/agent-entrypoint.sh" in dockerignore
+
+
 def test_server_entrypoint_drops_identity_and_all_capabilities():
     script = (ROOT / "deploy/server-entrypoint.sh").read_text(encoding="utf-8")
     assert "chown -R 10001:10001 /data" in script
