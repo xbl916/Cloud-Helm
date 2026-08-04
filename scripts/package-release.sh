@@ -33,6 +33,7 @@ tar -C "$project_root" \
   --exclude='.pytest_cache' \
   --exclude='.ruff_cache' \
   --exclude='.coverage' \
+  --exclude='project.private.config.json' \
   --exclude='cloudhelm-data' \
   --exclude='cloudhelm-postgres-data' \
   -cf - . | tar -C "$stage_dir" -xf -

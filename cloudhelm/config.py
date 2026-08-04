@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     wecom_corp_id: str = Field(min_length=2, max_length=128)
     wecom_agent_id: str = Field(min_length=1, max_length=32)
     wecom_secret: str = Field(min_length=8, max_length=512)
+    wecom_miniprogram_secret: str | None = Field(
+        default=None, min_length=8, max_length=512
+    )
     bootstrap_admin_wecom_userid: str = Field(min_length=1, max_length=128)
     bootstrap_admin_display_name: str = Field(default="系统管理员", max_length=120)
     session_minutes: int = Field(default=60, ge=5, le=1440)
@@ -31,9 +34,13 @@ class Settings(BaseSettings):
     max_task_result_bytes: int = Field(default=262144, ge=4096, le=2097152)
     node_offline_seconds: int = Field(default=60, ge=15, le=3600)
 
-    @field_validator("agent_enrollment_token", "wecom_secret")
+    @field_validator(
+        "agent_enrollment_token", "wecom_secret", "wecom_miniprogram_secret"
+    )
     @classmethod
-    def reject_example_secrets(cls, value: str) -> str:
+    def reject_example_secrets(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         lowered = value.lower()
         if "change-me" in lowered or "replace-me" in lowered:
             raise ValueError("example secrets must be replaced")

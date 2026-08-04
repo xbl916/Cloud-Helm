@@ -1,7 +1,7 @@
 name: cloudhelm-agent
 services:
   data-init:
-    image: ghcr.io/xbl916/cloud-helm-agent:0.4.2
+    image: ghcr.io/xbl916/cloud-helm-agent:0.5.0
     user: "0:0"
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -31,7 +31,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/agent.Dockerfile
-    image: ghcr.io/xbl916/cloud-helm-agent:0.4.2
+    image: ghcr.io/xbl916/cloud-helm-agent:0.5.0
     restart: unless-stopped
     init: true
     read_only: true

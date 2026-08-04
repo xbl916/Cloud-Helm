@@ -17,3 +17,4 @@ agent-state/
 data/
 cloudhelm-data/
 cloudhelm-postgres-data/
+miniprogram/project.private.config.json

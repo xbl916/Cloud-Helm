@@ -1,0 +1,19 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">CLOUD HELM</view><view class="title">基础设施总览</view><view class="subtitle">企业身份认证 · 最小容器权限 · 全程审计</view></view>
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+  <view wx:if="{{loading}}" class="loading">正在读取舰队状态…</view>
+  <block wx:elif="{{dashboard}}">
+    <view class="metric-grid">
+      <view class="metric"><view class="metric-label">在线节点</view><text class="metric-value">{{dashboard.nodes.online}}</text><text class="metric-note">共 {{dashboard.nodes.total}} 台</text></view>
+      <view class="metric"><view class="metric-label">运行容器</view><text class="metric-value">{{dashboard.containers.running}}</text><text class="metric-note">停止 {{dashboard.containers.stopped}}</text></view>
+      <view class="metric"><view class="metric-label">NVIDIA GPU</view><text class="metric-value">{{dashboard.gpus.total}}</text><text class="metric-note">活跃 {{dashboard.gpus.active}}</text></view>
+      <view class="metric"><view class="metric-label">GPU 平均负载</view><text class="metric-value">{{dashboard.gpus.average_utilization}}%</text><text class="metric-note">当前快照</text></view>
+    </view>
+    <view class="section-title">最近节点</view>
+    <view wx:if="{{!nodes.length}}" class="empty">还没有 Agent 上报节点</view>
+    <view wx:for="{{nodes}}" wx:key="id" class="card row" data-id="{{item.id}}" bindtap="openNode">
+      <view class="row-main"><view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.hostname}} · {{item.environment}} · {{item.lastSeen}}</text></view>
+      <view class="badge {{item.online ? '' : 'offline'}}">{{item.online ? '在线' : '离线'}}</view>
+    </view>
+  </block>
+</view>

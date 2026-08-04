@@ -29,8 +29,20 @@ class AuthContext:
     session: WebSession
 
 
-def current_auth(request: Request, db: Db) -> AuthContext:
+def current_auth(
+    request: Request,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+) -> AuthContext:
     token = request.cookies.get(SESSION_COOKIE)
+    if authorization is not None:
+        scheme, separator, bearer_token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not separator or not bearer_token.strip():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="访问令牌格式无效",
+            )
+        token = bearer_token.strip()
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     web_session = db.scalar(

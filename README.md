@@ -1,8 +1,8 @@
 # 云舵 Cloud Helm
 
-云舵是面向企业微信 H5 的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
+云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.4.2`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.5.0`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
@@ -10,6 +10,7 @@
 - [详细部署手册](#详细部署手册)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [人员与容器权限](#人员与容器权限)
+- [企业自用小程序](#企业自用小程序)
 - [实际使用中的安全注意事项](#实际使用中的安全注意事项)
 - [PostgreSQL 部署](#postgresql-部署)
 - [备份](#备份)
@@ -18,7 +19,7 @@
 
 ```text
 企业微信成员
-  │ HTTPS + OAuth（确认人员身份）
+  │ H5 OAuth 或小程序 wx.qy.login（确认人员身份）
   ▼
 Cloud Helm Server
   │ 服务端短期会话 + CSRF/Origin 校验
@@ -32,7 +33,8 @@ Docker Engine
 
 - 云舵不提供公网密码登录，只接受企业微信 OAuth。
 - 企微返回的 `UserId` 必须提前绑定；未绑定或停用成员默认拒绝。
-- 浏览器仅保存 `HttpOnly + Secure + SameSite` 随机会话 Cookie，不使用 `localStorage` JWT。
+- H5 浏览器仅保存 `HttpOnly + Secure + SameSite` 随机会话 Cookie，不使用 `localStorage` JWT。
+- 小程序只保存短期随机 Bearer 会话；它不是自包含 JWT，服务端仅保存其 SHA-256 摘要并可立即撤销。
 - OAuth `state` 绑定浏览器、五分钟过期且只能使用一次。
 - 写操作必须同时通过同源 `Origin` 和 CSRF 校验。
 - 普通用户创建后默认没有任何容器权限；管理员明确授权后才可访问。
@@ -91,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.4.2.tar.gz.sha256
-tar -xzf cloudhelm-0.4.2.tar.gz
-cd cloudhelm-0.4.2
+sha256sum -c cloudhelm-0.5.0.tar.gz.sha256
+tar -xzf cloudhelm-0.5.0.tar.gz
+cd cloudhelm-0.5.0
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.4.2.tar.gz: OK
+cloudhelm-0.5.0.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -158,6 +160,7 @@ CLOUDHELM_PUBLIC_BASE_URL=https://ops.company.com
 CLOUDHELM_WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
 CLOUDHELM_WECOM_AGENT_ID=1000002
 CLOUDHELM_WECOM_SECRET=应用的Secret
+# CLOUDHELM_WECOM_MINIPROGRAM_SECRET=关联小程序在当前企业下的Secret
 CLOUDHELM_WECOM_API_TIMEOUT_SECONDS=8
 CLOUDHELM_WECOM_API_BASE=https://qyapi.weixin.qq.com
 CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID=首位管理员的企微UserId
@@ -185,6 +188,7 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_WECOM_CORP_ID`|企业 ID|从企微管理后台复制|
 |`CLOUDHELM_WECOM_AGENT_ID`|自建应用 AgentId|从应用详情复制|
 |`CLOUDHELM_WECOM_SECRET`|自建应用 Secret|仅服务器保存|
+|`CLOUDHELM_WECOM_MINIPROGRAM_SECRET`|关联小程序在当前企业下的 Secret|仅启用小程序时填写；只保存于 Server，不是微信小程序 AppSecret|
 |`CLOUDHELM_WECOM_API_TIMEOUT_SECONDS`|调用企微 API 的单次超时秒数|默认 8，可设 2–30|
 |`CLOUDHELM_WECOM_API_BASE`|企微 API 根地址|保持官方地址 `https://qyapi.weixin.qq.com`|
 |`CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID`|首次创建的管理员身份|填写准确企微 `UserId`|
@@ -238,6 +242,20 @@ sudo systemctl status caddy --no-pager
 ```
 
 在 Cloud Helm Server 尚未启动时，域名可能暂时返回 `502`，这是反向代理找不到后端的正常现象。如果使用 Nginx 或其他网关，也必须转发原始 `Host`、客户端 IP，并保证公网只能通过 HTTPS 进入。
+
+如果 Caddy 自身也运行在容器中，不能使用 `127.0.0.1:8080`，因为该地址指向 Caddy 容器自己。创建只供反向代理使用的外部网络：
+
+```bash
+docker network create cloudhelm-proxy
+```
+
+通过 Compose override 将 Cloud Helm `server` 和 Caddy 服务都加入 `cloudhelm-proxy`，并给 Server 设置网络别名 `cloudhelm-server`；Caddy 应改为：
+
+```caddyfile
+reverse_proxy cloudhelm-server:8080
+```
+
+Server 的宿主机端口仍保持 `127.0.0.1:8080`，不要为了让 Caddy 容器连接而改成公网监听 `0.0.0.0:8080`。临时执行 `docker network connect` 只适合排障；将网络写入两个 Compose 文件，才能在容器重新创建后自动恢复。
 
 ### 7. 拉取并启动管理中心
 
@@ -304,7 +322,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.4.2/deploy
+cd cloudhelm-0.5.0/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -367,17 +385,29 @@ Agent 启动前也会运行一次性 `data-init`，自动将其状态目录设�
 
 #### NVIDIA GPU 节点启动方式
 
-普通节点继续只使用 `agent.compose.yml`。NVIDIA 节点必须把 GPU overlay 一起传给每条 Compose 命令：
+普通节点继续只使用 `agent.compose.yml`。GPU overlay 仅支持 `amd64`、`arm64`，不要求 `arm/v7` 支持 NVIDIA GPU。
+
+先确保 NVIDIA Container Toolkit 已注册为 Docker runtime。仅安装工具包但没有执行 runtime 配置时，容器可能看得到设备声明，却没有注入 `nvidia-smi`：
+
+```bash
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+docker info --format '{{json .Runtimes}}' | grep nvidia
+docker run --rm --runtime=nvidia --gpus all ubuntu:24.04 nvidia-smi -L
+```
+
+最后一条命令必须成功列出 GPU，再启动 Agent。NVIDIA 节点必须把 GPU overlay 一起传给每条 Compose 命令：
 
 ```bash
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml config
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml pull
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build
-docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-smi
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent test -x /usr/bin/nvidia-smi
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-smi -L
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-最后两条命令应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。overlay 为 Agent 保留全部 NVIDIA GPU，且只设置 `NVIDIA_DRIVER_CAPABILITIES=utility`，用于 `nvidia-smi`/NVML 查询。若 `config` 阶段报 GPU device reservation 错误，先确认 Docker Compose v2 和 NVIDIA Container Toolkit 已正确安装、Docker daemon 已重启。
+0.5.0 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -425,7 +455,8 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 |Agent 出现 TLS 错误|证书链和域名是否正确；不要通过关闭 TLS 校验绕过|
 |节点注册但没有容器|Docker Socket 是否正确挂载，Agent 是否有读取 socket 的权限|
 |节点持续离线|节点到管理中心 443 是否可达，系统时间是否准确，查看 Agent 日志|
-|宿主机可运行 `nvidia-smi`，页面却提示 GPU 不可用|启动 Agent 时是否同时使用 `agent.gpu.compose.yml`，Toolkit 是否已配置给 Docker，容器内 `nvidia-smi` 是否正常|
+|宿主机可运行 `nvidia-smi`，Agent 容器却没有该命令|是否同时使用 `agent.gpu.compose.yml`；执行 `nvidia-ctk runtime configure --runtime=docker` 后是否重启 Docker；`docker info` 是否列出 `nvidia` runtime|
+|容器内可运行 `nvidia-smi`，页面却提示 GPU 不可用|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH` 是否为 `/usr/bin/nvidia-smi`，查看 Agent 日志中的 XML 解析、超时或输出上限错误|
 |页面有 GPU，但某容器显示未分配|Docker inspect 的 `HostConfig.DeviceRequests` 是否包含 NVIDIA GPU；旧式 runtime 则检查 `NVIDIA_VISIBLE_DEVICES`|
 
 排查命令：
@@ -472,6 +503,76 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - 点击“下线”立即撤销某人的全部云舵会话；
 - 点击“停用”阻止后续访问并撤销现有会话；
 - 通过 `PATCH /api/v1/users/{id}` 调整显示名、角色或企微 `UserId`，身份或角色变化会自动撤销该用户现有会话。
+
+## 企业自用小程序
+
+仓库的 `miniprogram/` 是原生企业微信小程序前端，面向单一企业内部使用，不需要注册企业微信第三方服务商。它复用现有 Server、Agent、用户表、容器权限和审计数据，包含总览、节点、NVIDIA GPU、容器详情、日志、启停/重启、审计以及管理员的用户授权页面。
+
+登录流程为：
+
+```text
+企业微信小程序 wx.qy.login()
+  │ 五分钟一次性 code
+  ▼
+POST /api/v1/auth/wecom-mini/login
+  │ Server 使用当前企业的小程序 Secret 调用 jscode2session
+  │ 校验返回 CorpId，并匹配已绑定 UserId
+  ▼
+短期随机 Bearer 会话 → 现有资源权限和审计 API
+```
+
+小程序不会获得企业 Secret、Agent 令牌、数据库凭据或 Docker Socket。返回给小程序的是随机、不透明、绝对过期的短期会话，不是携带权限信息的 JWT；Server 只保存令牌摘要，管理员执行“下线”或“停用”后会立即失效。企业微信的 `session_key` 也不会返回给小程序或保存到数据库。
+
+### 1. 注册并关联小程序
+
+1. 在微信公众平台注册组织主体的小程序，取得小程序 AppID。
+2. 使用微信开发者工具导入仓库中的 `miniprogram/` 目录，将 `project.config.json` 的 `touristappid` 换成实际 AppID。
+3. 在企业微信管理后台进入“应用管理 → 小程序 → 关联小程序”，按页面指引关联并设置成员可见范围。
+4. 从关联后的小程序详情取得**当前企业对应的 Secret**。它与 H5 自建应用 Secret、微信小程序 AppSecret 是不同的凭据，以企业微信后台实际展示为准。
+5. 小程序正式发布前，在微信小程序后台完成版本审核、备案和服务器域名配置。
+
+企业微信支持关联微信小程序，并使用 `wx.qy.login()` 获取临时 code；Server 再通过企业微信 `jscode2session` 换取员工 `UserId`。参考[企业微信小程序开发前须知](https://developers.weixin.qq.com/miniprogram/dev/dev_wxwork/dev-doc/qywx-api.html)和[小程序登录接口](https://developers.weixin.qq.com/miniprogram/dev/dev_wxwork/dev-doc/qywx-api/login/wx.qy.login.html)。
+
+### 2. 配置 Server
+
+在管理中心 `.env` 增加：
+
+```dotenv
+CLOUDHELM_WECOM_MINIPROGRAM_SECRET=关联小程序在当前企业下的Secret
+```
+
+不要把该 Secret 写入 `miniprogram/config.js`、提交到 Git 或发送给 Agent。更新后只需重新创建 Server：
+
+```bash
+docker compose up -d --no-build --force-recreate server
+docker compose logs --tail=100 server
+```
+
+未配置该变量时，H5 登录和 Agent 不受影响，小程序登录会明确返回 `503`。
+
+### 3. 配置小程序 API 地址
+
+编辑 `miniprogram/config.js`：
+
+```javascript
+module.exports = {
+  baseUrl: "https://ops.company.com"
+}
+```
+
+地址必须与 `CLOUDHELM_PUBLIC_BASE_URL` 一致，只包含 HTTPS 协议和域名，不要附加 `/api` 或结尾 `/`。该文件只含公开地址，不应放任何 Secret。
+
+在微信小程序后台把 `https://ops.company.com` 配置为 `request` 合法域名。开发者工具可以临时关闭域名校验用于本地联调，但体验版和正式版必须使用有效 HTTPS 域名，不能依赖这个开发选项绕过平台检查。
+
+### 4. 联调与发布
+
+1. 在微信开发者工具中选择企业微信运行环境或企业模拟，确认 `wx.qy.login()` 能返回 code。
+2. 先上传体验版，并把测试成员同时加入小程序体验范围、企业微信小程序可见范围和云舵“用户与权限”。
+3. 验证未绑定成员被拒绝，普通成员只看见已授权容器，只读成员不能启停容器。
+4. 验证日志、停止和重启操作均出现在审计页面。
+5. 完成小程序隐私说明、备案和版本审核后，再扩大企业微信可见范围。
+
+小程序与 H5 可以同时保留：移动端使用小程序，桌面端和应急入口继续使用 H5。两者共用会话数量上限；默认单用户最多 5 个有效会话、每个会话 60 分钟。
 
 ## 实际使用中的安全注意事项
 
@@ -617,7 +718,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.4.2
+bash scripts/package-release.sh 0.5.0
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -625,11 +726,11 @@ bash scripts/package-release.sh 0.4.2
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.4.2
-git push origin v0.4.2
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.4.2`
-- `ghcr.io/xbl916/cloud-helm-agent:0.4.2`
+- `ghcr.io/xbl916/cloud-helm-server:0.5.0`
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.0`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.4.2` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

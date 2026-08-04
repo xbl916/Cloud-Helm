@@ -34,6 +34,8 @@ jobs:
           uv run ruff check .
           uv run pytest
           uv run python scripts/check-version.py
+          uv run python scripts/check-miniprogram.py
+          find miniprogram -name '*.js' -type f -print0 | xargs -0 -n1 node --check
           bash -n scripts/package-release.sh
 
       - name: Prepare smoke-test configuration

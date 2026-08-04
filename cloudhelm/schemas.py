@@ -16,6 +16,25 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MiniProgramLogin(BaseModel):
+    code: str = Field(min_length=1, max_length=512)
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("企业微信登录凭证不能为空")
+        return value
+
+
+class MiniProgramLoginOut(BaseModel):
+    access_token: str
+    token_type: Literal["Bearer"] = "Bearer"
+    expires_in: int
+    user: UserOut
+
+
 class UserCreate(BaseModel):
     wecom_userid: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=120)

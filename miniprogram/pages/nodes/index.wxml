@@ -1,0 +1,10 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">INFRASTRUCTURE</view><view class="title">全部节点</view></view>
+  <input class="input" placeholder="搜索节点、主机名或环境" value="{{query}}" bindinput="search" />
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">加载节点…</view>
+  <view wx:elif="{{!nodes.length}}" class="empty">没有符合条件的节点</view>
+  <view wx:for="{{nodes}}" wx:key="id" class="card" data-id="{{item.id}}" bindtap="openNode">
+    <view class="row"><view class="row-main"><view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.hostname}} · {{item.environment}}</text></view><view class="badge {{item.online ? '' : 'offline'}}">{{item.online ? '在线' : '离线'}}</view></view>
+    <view class="node-stats"><text>容器 {{item.running_count}} / {{item.container_count}}</text><text>GPU {{item.gpus.length}}</text><text>{{item.lastSeen}}</text></view>
+  </view>
+</view>

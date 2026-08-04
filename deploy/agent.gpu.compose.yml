@@ -1,5 +1,8 @@
 services:
   agent:
+    # Force the NVIDIA OCI runtime so the host-matched nvidia-smi binary and
+    # NVML libraries are injected instead of relying on Docker runtime defaults.
+    runtime: nvidia
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility

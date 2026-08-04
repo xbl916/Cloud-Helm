@@ -1,0 +1,13 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">ACCESS CONTROL</view><view class="title">用户与权限</view><view class="subtitle">用户必须先绑定准确企业微信 UserId，普通用户创建后默认没有资源权限。</view></view>
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+  <view class="card">
+    <view class="section-title form-title">添加成员</view>
+    <view class="field"><text class="field-label">企业微信 UserId</text><input class="input" value="{{form.wecom_userid}}" data-field="wecom_userid" bindinput="input" placeholder="必须与企微后台完全一致" /></view>
+    <view class="field"><text class="field-label">显示名称</text><input class="input" value="{{form.display_name}}" data-field="display_name" bindinput="input" placeholder="例如 张三" /></view>
+    <view class="field"><text class="field-label">角色</text><picker range="{{roles}}" range-key="label" value="{{roleIndex}}" bindchange="chooseRole"><view class="picker">{{roles[roleIndex].label}}</view></picker></view>
+    <button class="button" loading="{{saving}}" bindtap="addUser">创建账号</button>
+  </view>
+  <view class="section-title">现有成员</view><view wx:if="{{loading}}" class="loading">加载成员…</view>
+  <view wx:for="{{users}}" wx:key="id" class="card user"><view class="row"><view class="row-main"><view class="row-title">{{item.display_name}}</view><text class="row-subtitle">企微 {{item.wecom_userid}} · {{item.is_active ? '已启用' : '已停用'}} · {{item.resource_restricted ? '自定义范围' : '全部资源'}}</text></view><view class="badge">{{item.roleName}}</view></view><view wx:if="{{item.role !== 'admin'}}" class="actions"><button size="mini" data-id="{{item.id}}" data-name="{{item.display_name}}" data-role="{{item.role}}" bindtap="openAccess">配置范围</button><button size="mini" data-id="{{item.id}}" bindtap="revoke">下线</button><button size="mini" data-id="{{item.id}}" data-active="{{item.is_active}}" bindtap="toggleUser">{{item.is_active ? '停用' : '启用'}}</button></view></view>
+</view>

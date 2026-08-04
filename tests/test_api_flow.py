@@ -12,7 +12,7 @@ def test_agent_inventory_and_task_flow(
             "name": "生产节点一",
             "hostname": "prod-01",
             "environment": "production",
-            "agent_version": "0.4.2",
+            "agent_version": "0.5.0",
         },
     )
     assert enroll.status_code == 200
@@ -27,7 +27,7 @@ def test_agent_inventory_and_task_flow(
         headers=agent_headers,
         json={
             "hostname": "prod-01",
-            "agent_version": "0.4.2",
+            "agent_version": "0.5.0",
             "docker_version": "28.0.0",
             "os": "Linux / x86_64",
             "gpu_status": "ok",

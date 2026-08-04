@@ -1,0 +1,22 @@
+<view class="page">
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">读取容器详情…</view>
+  <block wx:elif="{{container}}">
+    <view class="hero"><view class="eyebrow">{{container.status}} · {{container.health || 'NO HEALTHCHECK'}}</view><view class="title">{{container.name}}</view><view class="subtitle">{{container.node_name}} / {{container.compose_project || '独立容器'}}</view></view>
+    <view class="metric-grid">
+      <view class="metric"><view class="metric-label">CPU 使用率</view><text class="metric-value small">{{container.cpu_percent}}%</text></view>
+      <view class="metric"><view class="metric-label">内存</view><text class="metric-value small">{{container.memory}}</text></view>
+      <view class="metric"><view class="metric-label">内存占比</view><text class="metric-value small">{{container.memory_percent}}%</text></view>
+      <view class="metric"><view class="metric-label">GPU 分配</view><text class="metric-value small">{{container.gpuText}}</text></view>
+    </view>
+    <view class="section-title">运行信息</view>
+    <view class="card details"><view><text>镜像</text><text>{{container.image || '—'}}</text></view><view><text>Compose 服务</text><text>{{container.compose_service || '—'}}</text></view><view><text>容器 ID</text><text class="mono">{{container.docker_id}}</text></view><view><text>状态更新</text><text>{{container.updated}}</text></view></view>
+    <view wx:if="{{container.assigned_gpus.length}}" class="section-title">已分配 GPU 当前状态（整卡）</view>
+    <view wx:for="{{container.assigned_gpus}}" wx:key="uuid" class="card gpu"><view class="row-title">GPU {{item.index}} · {{item.name}}</view><text class="row-subtitle">负载 {{item.utilization}} · 显存 {{item.memory}} · {{item.temperature}}</text></view>
+    <button wx:if="{{container.permissions.logs}}" class="button secondary" loading="{{working}}" bindtap="readLogs">查看最近日志</button>
+    <block wx:if="{{container.permissions.operate}}">
+      <button class="button" data-action="{{container.status === 'running' ? 'restart' : 'start'}}" loading="{{working}}" bindtap="confirmAction">{{container.status === 'running' ? '重启容器' : '启动容器'}}</button>
+      <button wx:if="{{container.status === 'running'}}" class="button danger" data-action="stop" loading="{{working}}" bindtap="confirmAction">停止容器</button>
+    </block>
+  </block>
+</view>
+<view wx:if="{{logsVisible}}" class="logs-mask"><view class="logs-panel"><view class="row"><view class="row-title">{{container.name}} · 日志</view><text class="close" bindtap="closeLogs">×</text></view><scroll-view class="logs" scroll-y="true"><text selectable="true">{{logs}}</text></scroll-view><button class="button secondary" bindtap="closeLogs">关闭</button></view></view>

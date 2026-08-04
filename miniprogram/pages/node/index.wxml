@@ -1,0 +1,19 @@
+<view class="page">
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">读取节点状态…</view>
+  <block wx:elif="{{node}}">
+    <view class="hero"><view class="eyebrow">{{node.environment}} · {{node.online ? 'ONLINE' : 'OFFLINE'}}</view><view class="title">{{node.name}}</view><view class="subtitle">{{node.hostname}} · Docker {{node.docker_version}} · {{node.lastSeen}}</view></view>
+    <view wx:if="{{node.gpu_error}}" class="error">GPU 监控：{{node.gpu_error}}</view>
+    <view wx:if="{{node.gpus.length}}" class="section-title">NVIDIA GPU</view>
+    <view wx:for="{{node.gpus}}" wx:key="uuid" class="card gpu">
+      <view class="row"><view class="row-main"><view class="row-title">GPU {{item.index}} · {{item.name}}</view><text class="row-subtitle mono">{{item.uuid}}</text></view><view class="badge">{{item.utilization}}</view></view>
+      <view class="gpu-stats"><text>显存 {{item.memory}}</text><text>温度 {{item.temperature}}</text><text>功耗 {{item.power}}</text></view>
+    </view>
+    <view class="section-title">容器</view>
+    <view wx:if="{{!containers.length}}" class="empty">此节点没有可见容器</view>
+    <view wx:for="{{containers}}" wx:key="id" class="card row" data-id="{{item.id}}" bindtap="openContainer">
+      <view class="state {{item.status === 'running' ? 'running' : ''}}"></view>
+      <view class="row-main"><view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.compose_project || '独立容器'}} · CPU {{item.cpu_percent}}% · {{item.memory}}</text><text wx:if="{{item.gpu}}" class="gpu-label">GPU {{item.gpu}}</text></view>
+      <text class="arrow">›</text>
+    </view>
+  </block>
+</view>

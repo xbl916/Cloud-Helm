@@ -1,0 +1,1 @@
+.audit{border-left:6rpx solid #46a88a}.audit.failed{border-left-color:#c95757}.detail{font-size:20rpx;color:#72868d;background:#f4f8f8;border-radius:12rpx;padding:14rpx;margin-top:14rpx;word-break:break-all}

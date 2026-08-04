@@ -1,32 +1,33 @@
-# Cloud Helm 0.4.2
+# Cloud Helm 0.5.0
 
-## 自动初始化宿主机数据目录
+## 企业自用小程序
 
-- Server 和 Agent 默认使用发布目录下的 `./cloudhelm-data:/data` bind mount。
-- 新增一次性 `data-init` 服务，在主服务启动前自动修复数据目录属主和 `0700` 权限。
-- 初始化容器不读取业务 Secret、不连接网络、不挂载 Docker Socket，并仅获得目录初始化所需的最小 capabilities。
-- Server 继续以固定的非 root 用户 `10001:10001` 运行，并保持只读根文件系统和 `cap_drop: ALL`。
-- 不再要求部署人员查询镜像 UID 或手动执行 `chown`，也不需要使用不安全的 `chmod 777`。
+- 新增原生企业微信小程序前端，包含总览、节点、容器、NVIDIA GPU、日志、启停/重启、审计以及用户资源授权。
+- 新增 `wx.qy.login()` 服务端登录接口；Server 使用关联小程序在当前企业下的独立 Secret 换取并校验 `CorpId` 与 `UserId`。
+- 小程序使用短期随机 Bearer 会话，不在客户端保存企业 Secret、Agent 凭据、Docker 凭据或自包含权限令牌。
+- 小程序与 H5 共用现有用户、容器范围、会话撤销和审计模型；未绑定、已停用或越权成员继续默认拒绝。
 
-## 容器运行默认值
+## NVIDIA Agent 修复
 
-- Server、Agent 和 PostgreSQL 默认使用 `Asia/Shanghai` 时区。
-- 所有 Compose 服务使用 `json-file` 日志轮转，单文件上限 `50m`、最多 3 个文件，即每个容器约 `150m`。
-- PostgreSQL 数据改为宿主机目录 `deploy/cloudhelm-postgres-data`。
-- Git 和源码发布包明确排除 Server 数据、PostgreSQL 数据及 Agent 节点凭据。
+- GPU overlay 显式选择 `nvidia` OCI runtime，确保 NVIDIA Container Toolkit 注入与宿主机驱动匹配的 `/usr/bin/nvidia-smi` 和 NVML 库。
+- 保留 `NVIDIA_VISIBLE_DEVICES=all` 和最小 `NVIDIA_DRIVER_CAPABILITIES=utility`，Agent 不需要完整 CUDA 工具链。
+- GPU 运行方式支持 `linux/amd64` 与 `linux/arm64`；`linux/arm/v7` Agent 继续发布，但不承诺 NVIDIA GPU 监控。
+- 增加容器内 `nvidia-smi -L` 和 Agent GPU 上报的部署验收说明。
 
-## 配置与发布可靠性
+`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.0 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
 
-- README 补齐 Server、Agent 和 PostgreSQL 的全部部署变量、默认值、取值范围与生产建议。
-- 新增版本一致性检查，防止项目版本、应用版本、页面版本和 Compose 镜像标签不一致。
-- 新增 CI：在全新的空数据目录中构建并启动 Server，验证自动初始化、SQLite 写入和健康检查。
-- 推送 `vMAJOR.MINOR.PATCH` 标签后继续自动创建 GitHub Release，并构建多架构 Server 与 Agent 镜像。
+## 部署和质量保障
+
+- README 补充企业自用小程序注册、关联、Secret、合法域名、体验版和正式发布流程。
+- README 补充容器化 Caddy 的共享网络方式，避免在 Caddy 容器内错误代理 `127.0.0.1:8080`。
+- CI 新增小程序 JavaScript、JSON、WXML 和 WXSS 语法检查。
+- 服务端认证、权限、GPU、Agent 任务及小程序会话测试保持全量通过。
 
 ## 发布产物
 
-- `cloudhelm-0.4.2.tar.gz`：架构无关源码发布包。
-- `cloudhelm-0.4.2.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.4.2`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.4.2`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
+- `cloudhelm-0.5.0.tar.gz`：架构无关源码与小程序发布包。
+- `cloudhelm-0.5.0.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.5.0`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.0`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
-发布产物不包含 `.env`、数据库、企微 Secret、Agent 注册令牌或节点身份文件。本版本仍按全新安装设计，不包含旧数据库升级逻辑。
+发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。

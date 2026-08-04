@@ -1,0 +1,5 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">AUDIT TRAIL</view><view class="title">操作审计</view><view class="subtitle">关键操作、授权和登录行为均由 Server 留痕</view></view>
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">加载审计记录…</view><view wx:elif="{{!items.length}}" class="empty">暂无审计记录</view>
+  <view wx:for="{{items}}" wx:key="id" class="card audit {{item.success ? '' : 'failed'}}"><view class="row"><view class="row-title">{{item.username}} · {{item.action}}</view><view class="badge {{item.success ? '' : 'offline'}}">{{item.success ? '成功' : '失败'}}</view></view><text class="row-subtitle">{{item.target_name || item.target_type}} · {{item.time}}</text><view wx:if="{{item.detail}}" class="detail">{{item.detail}}</view></view>
+</view>

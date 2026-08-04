@@ -1,0 +1,32 @@
+{
+  "pages": [
+    "pages/overview/index",
+    "pages/nodes/index",
+    "pages/node/index",
+    "pages/container/index",
+    "pages/profile/index",
+    "pages/audit/index",
+    "pages/users/index",
+    "pages/access/index"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#071d2b",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "云舵",
+    "backgroundColor": "#f2f7f7",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#738890",
+    "selectedColor": "#118e83",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {"pagePath": "pages/overview/index", "text": "总览"},
+      {"pagePath": "pages/nodes/index", "text": "节点"},
+      {"pagePath": "pages/profile/index", "text": "我的"}
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

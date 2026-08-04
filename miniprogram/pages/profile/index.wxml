@@ -1,0 +1,12 @@
+<view class="page">
+  <view class="hero"><view class="eyebrow">ACCOUNT</view><view class="title">我的账号</view></view>
+  <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">读取身份…</view>
+  <view wx:elif="{{signedOut}}" class="card"><view class="row-title">已退出云舵</view><text class="row-subtitle">本机短期会话已撤销，可以随时重新读取当前企业微信身份。</text><button class="button" bindtap="loginAgain">重新登录</button></view>
+  <block wx:elif="{{user}}">
+    <view class="card profile"><view class="avatar">{{user.avatar}}</view><view><view class="row-title">{{user.display_name}}</view><text class="row-subtitle">{{roleName}} · 企微 {{user.wecom_userid}}</text></view></view>
+    <view class="card settings"><view><text>身份验证</text><text>企业微信小程序</text></view><view><text>资源权限</text><text>服务端强制校验</text></view><view><text>节点通信</text><text>独立 Agent 令牌</text></view></view>
+    <button class="button secondary" bindtap="openAudit">操作审计</button>
+    <button wx:if="{{user.role === 'admin'}}" class="button" bindtap="openUsers">用户与容器权限</button>
+    <button class="button danger" bindtap="logout">退出登录</button>
+  </block>
+</view>

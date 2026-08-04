@@ -70,6 +70,8 @@ async def security_headers(request: Request, call_next):
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path.startswith("/api/v1/")
         and not request.url.path.startswith("/api/v1/agent/")
+        and request.url.path != "/api/v1/auth/wecom-mini/login"
+        and not request.headers.get("authorization", "").lower().startswith("bearer ")
     ):
         origin = request.headers.get("origin")
         referer = request.headers.get("referer")

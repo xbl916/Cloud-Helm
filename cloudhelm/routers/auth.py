@@ -23,7 +23,7 @@ from cloudhelm.dependencies import (
     request_ip,
 )
 from cloudhelm.models import OAuthState, User, WebSession
-from cloudhelm.schemas import UserOut
+from cloudhelm.schemas import MiniProgramLogin, MiniProgramLoginOut, UserOut
 from cloudhelm.security import digest_token, new_opaque_token, safe_relative_path
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -57,10 +57,10 @@ def _wecom_error(message: str, status_code: int = 403) -> HTMLResponse:
     return HTMLResponse(body, status_code=status_code)
 
 
-def _cached_access_token(settings: Config) -> str | None:
+def _cached_access_token(settings: Config, secret: str) -> str | None:
     key = (
         settings.wecom_corp_id,
-        hashlib.sha256(settings.wecom_secret.encode()).hexdigest(),
+        hashlib.sha256(secret.encode()).hexdigest(),
     )
     with _token_cache_lock:
         cached = _token_cache.get(key)
@@ -69,10 +69,12 @@ def _cached_access_token(settings: Config) -> str | None:
     return None
 
 
-def _store_access_token(settings: Config, token: str, expires_in: int) -> None:
+def _store_access_token(
+    settings: Config, secret: str, token: str, expires_in: int
+) -> None:
     key = (
         settings.wecom_corp_id,
-        hashlib.sha256(settings.wecom_secret.encode()).hexdigest(),
+        hashlib.sha256(secret.encode()).hexdigest(),
     )
     ttl = max(0, min(expires_in - 60, 7000))
     if ttl == 0:
@@ -81,15 +83,16 @@ def _store_access_token(settings: Config, token: str, expires_in: int) -> None:
         _token_cache[key] = (token, time.monotonic() + ttl)
 
 
-async def _get_access_token(settings: Config) -> str:
-    cached = _cached_access_token(settings)
+async def _get_access_token(settings: Config, secret: str | None = None) -> str:
+    credential = secret or settings.wecom_secret
+    cached = _cached_access_token(settings, credential)
     if cached:
         return cached
     try:
         async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
             response = await client.get(
                 f"{settings.wecom_api_base}/cgi-bin/gettoken",
-                params={"corpid": settings.wecom_corp_id, "corpsecret": settings.wecom_secret},
+                params={"corpid": settings.wecom_corp_id, "corpsecret": credential},
             )
             response.raise_for_status()
             payload = response.json()
@@ -98,7 +101,9 @@ async def _get_access_token(settings: Config) -> str:
     if payload.get("errcode") != 0 or not payload.get("access_token"):
         raise HTTPException(status_code=502, detail="企业微信应用凭据校验失败")
     token = str(payload["access_token"])
-    _store_access_token(settings, token, int(payload.get("expires_in", 7200)))
+    _store_access_token(
+        settings, credential, token, int(payload.get("expires_in", 7200))
+    )
     return token
 
 
@@ -120,6 +125,90 @@ async def resolve_wecom_userid(code: str, settings: Config) -> str:
     if not isinstance(user_id, str) or not user_id.strip():
         raise HTTPException(status_code=403, detail="仅允许企业内部成员访问")
     return user_id.strip()
+
+
+async def resolve_wecom_miniprogram_userid(code: str, settings: Config) -> str:
+    if not settings.wecom_miniprogram_secret:
+        raise HTTPException(status_code=503, detail="服务端尚未配置企业微信小程序 Secret")
+    access_token = await _get_access_token(
+        settings, secret=settings.wecom_miniprogram_secret
+    )
+    try:
+        async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
+            response = await client.get(
+                f"{settings.wecom_api_base}/cgi-bin/miniprogram/jscode2session",
+                params={
+                    "access_token": access_token,
+                    "js_code": code,
+                    "grant_type": "authorization_code",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="企业微信小程序认证服务暂不可用") from exc
+    if payload.get("errcode") != 0:
+        raise HTTPException(status_code=401, detail="企业微信小程序登录凭证无效或已使用")
+    corp_id = payload.get("corpid") or payload.get("corp_id")
+    if not isinstance(corp_id, str) or not secrets.compare_digest(
+        corp_id, settings.wecom_corp_id
+    ):
+        raise HTTPException(status_code=403, detail="小程序登录企业与云舵配置不一致")
+    user_id = payload.get("userid") or payload.get("UserId")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(status_code=403, detail="仅允许当前企业内部成员访问")
+    return user_id.strip()
+
+
+def _issue_session(
+    *,
+    db: Db,
+    settings: Config,
+    request: Request,
+    user: User,
+    audit_action: str,
+) -> tuple[str, str, datetime]:
+    now = datetime.now(UTC)
+    active_sessions = list(
+        db.scalars(
+            select(WebSession)
+            .where(
+                WebSession.user_id == user.id,
+                WebSession.revoked_at.is_(None),
+                WebSession.expires_at > now,
+            )
+            .order_by(WebSession.created_at.desc())
+        ).all()
+    )
+    for old_session in active_sessions[settings.max_sessions_per_user - 1 :]:
+        old_session.revoked_at = now
+        old_session.revoke_reason = "session limit"
+
+    raw_session = new_opaque_token()
+    raw_csrf = new_opaque_token()
+    expires_at = now + timedelta(minutes=settings.session_minutes)
+    db.add(
+        WebSession(
+            token_hash=digest_token(raw_session),
+            csrf_token_hash=digest_token(raw_csrf),
+            user_id=user.id,
+            expires_at=expires_at,
+            ip_address=request_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:512] or None,
+        )
+    )
+    user.last_login_at = now
+    add_audit(
+        db,
+        action=audit_action,
+        target_type="session",
+        user=user,
+        target_name=user.username,
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return raw_session, raw_csrf, expires_at
 
 
 @router.get("/wecom/start")
@@ -219,45 +308,13 @@ async def wecom_callback(
         db.commit()
         return _wecom_error("当前企业微信成员尚未获得云舵访问权限。")
 
-    active_sessions = list(
-        db.scalars(
-            select(WebSession)
-            .where(
-                WebSession.user_id == user.id,
-                WebSession.revoked_at.is_(None),
-                WebSession.expires_at > now,
-            )
-            .order_by(WebSession.created_at.desc())
-        ).all()
-    )
-    for old_session in active_sessions[settings.max_sessions_per_user - 1 :]:
-        old_session.revoked_at = now
-        old_session.revoke_reason = "session limit"
-
-    raw_session = new_opaque_token()
-    raw_csrf = new_opaque_token()
-    expires_at = now + timedelta(minutes=settings.session_minutes)
-    db.add(
-        WebSession(
-            token_hash=digest_token(raw_session),
-            csrf_token_hash=digest_token(raw_csrf),
-            user_id=user.id,
-            expires_at=expires_at,
-            ip_address=request_ip(request, settings),
-            user_agent=request.headers.get("user-agent", "")[:512] or None,
-        )
-    )
-    user.last_login_at = now
-    add_audit(
-        db,
-        action="wecom.login",
-        target_type="session",
-        user=user,
-        target_name=user.username,
-        request=request,
+    raw_session, raw_csrf, _ = _issue_session(
+        db=db,
         settings=settings,
+        request=request,
+        user=user,
+        audit_action="wecom.login",
     )
-    db.commit()
     response = RedirectResponse(oauth_state.next_path, status_code=303)
     response.delete_cookie(OAUTH_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     response.set_cookie(
@@ -279,6 +336,61 @@ async def wecom_callback(
         path="/",
     )
     return response
+
+
+@router.post("/wecom-mini/login", response_model=MiniProgramLoginOut)
+async def wecom_miniprogram_login(
+    payload: MiniProgramLogin,
+    request: Request,
+    db: Db,
+    settings: Config,
+) -> dict:
+    _rate_limit_oauth_start(request_ip(request, settings) or "unknown")
+    try:
+        wecom_userid = await resolve_wecom_miniprogram_userid(payload.code, settings)
+    except HTTPException as exc:
+        add_audit(
+            db,
+            action="wecom.mini.login.denied",
+            target_type="session",
+            target_name="unknown",
+            success=False,
+            detail=str(exc.detail),
+            request=request,
+            settings=settings,
+        )
+        db.commit()
+        raise
+    user = db.scalar(select(User).where(User.wecom_userid == wecom_userid))
+    if not user or not user.is_active:
+        add_audit(
+            db,
+            action="wecom.mini.login.denied",
+            target_type="session",
+            target_name=wecom_userid,
+            success=False,
+            detail="member is not bound or is disabled",
+            request=request,
+            settings=settings,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=403, detail="当前企业微信成员尚未获得云舵访问权限"
+        )
+    raw_session, _, expires_at = _issue_session(
+        db=db,
+        settings=settings,
+        request=request,
+        user=user,
+        audit_action="wecom.mini.login",
+    )
+    expires_in = max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
+    return {
+        "access_token": raw_session,
+        "token_type": "Bearer",
+        "expires_in": expires_in,
+        "user": user,
+    }
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

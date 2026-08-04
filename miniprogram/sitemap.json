@@ -1,0 +1,4 @@
+{
+  "desc": "Cloud Helm 企业自用小程序不参与微信搜索",
+  "rules": [{"action": "disallow", "page": "*"}]
+}
