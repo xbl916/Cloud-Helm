@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.5.1`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.5.2`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
 
 快速导航：
 
@@ -93,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.5.1.tar.gz.sha256
-tar -xzf cloudhelm-0.5.1.tar.gz
-cd cloudhelm-0.5.1
+sha256sum -c cloudhelm-0.5.2.tar.gz.sha256
+tar -xzf cloudhelm-0.5.2.tar.gz
+cd cloudhelm-0.5.2
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.5.1.tar.gz: OK
+cloudhelm-0.5.2.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -322,7 +322,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.5.1/deploy
+cd cloudhelm-0.5.2/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -407,7 +407,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-s
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.5.1 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+0.5.2 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -513,9 +513,9 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 |运维 `operator`|按授权|按授权|按授权|否|
 |只读 `viewer`|按授权|按授权|否|否|
 
-添加用户时填写其准确的企业微信 `UserId`。新建普通用户默认使用“自定义资源范围”且规则为空，即登录后看不到任何节点。
+添加用户时填写其准确的企业微信 `UserId`，并直接选择“全部资源”或“自定义资源范围”。自定义模式创建账号后会自动进入资源绑定页；未勾选任何规则时，该用户登录后看不到任何节点。
 
-管理员点击“配置范围”，可以按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”或“查看 + 日志 + 运维”。服务端会对列表、容器详情、任务和审计接口重复执行授权校验，不能通过直接输入容器 ID 绕过。
+管理员可以在创建流程或用户列表的“配置范围”中，按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”或“查看 + 日志 + 运维”。管理员角色始终拥有全部资源。服务端会对列表、容器详情、任务和审计接口重复执行授权校验，不能通过直接输入容器 ID 绕过。
 
 管理员还可以：
 
@@ -751,7 +751,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.5.1
+bash scripts/package-release.sh 0.5.2
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -759,11 +759,11 @@ bash scripts/package-release.sh 0.5.1
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.5.1
-git push origin v0.5.1
+git tag v0.5.2
+git push origin v0.5.2
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.5.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.5.2`
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.2`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.2` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

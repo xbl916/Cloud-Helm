@@ -10,12 +10,14 @@
     </view>
     <view class="section-title">运行信息</view>
     <view class="card details"><view><text>镜像</text><text>{{container.image || '—'}}</text></view><view><text>Compose 服务</text><text>{{container.compose_service || '—'}}</text></view><view><text>容器 ID</text><text class="mono">{{container.docker_id}}</text></view><view><text>状态更新</text><text>{{container.updated}}</text></view></view>
-    <view wx:if="{{container.permissions.update_image &amp;&amp; container.imageRepository}}" class="card image-update">
-      <view class="row-title">管理员 · 替换镜像 Tag</view>
-      <text class="row-subtitle">仓库固定为 {{container.imageRepository}}。Compose 文件不会同步修改。</text>
-      <input class="tag-input" value="{{targetTag}}" maxlength="128" placeholder="输入新 Tag，例如 1.4.2" bindinput="onTargetTag" />
-      <button class="button secondary" loading="{{working}}" bindtap="confirmImageUpdate">下一步：核对变更</button>
-    </view>
+    <block wx:if="{{container.permissions.update_image}}">
+      <view wx:if="{{container.imageRepository}}" class="card image-update">
+        <view class="row-title">管理员 · 替换镜像 Tag</view>
+        <text class="row-subtitle">仓库固定为 {{container.imageRepository}}。Compose 文件不会同步修改。</text>
+        <input class="tag-input" value="{{targetTag}}" maxlength="128" placeholder="输入新 Tag，例如 1.4.2" bindinput="onTargetTag" />
+        <button class="button secondary" loading="{{working}}" bindtap="confirmImageUpdate">下一步：核对变更</button>
+      </view>
+    </block>
     <view wx:if="{{container.assigned_gpus.length}}" class="section-title">已分配 GPU 当前状态（整卡）</view>
     <view wx:for="{{container.assigned_gpus}}" wx:key="uuid" class="card gpu"><view class="row-title">GPU {{item.index}} · {{item.name}}</view><text class="row-subtitle">负载 {{item.utilization}} · 显存 {{item.memory}} · {{item.temperature}}</text></view>
     <button wx:if="{{container.permissions.logs}}" class="button secondary" loading="{{working}}" bindtap="readLogs">查看最近日志</button>

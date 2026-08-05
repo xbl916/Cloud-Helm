@@ -12,7 +12,7 @@ def test_agent_inventory_and_task_flow(
             "name": "生产节点一",
             "hostname": "prod-01",
             "environment": "production",
-            "agent_version": "0.5.1",
+            "agent_version": "0.5.2",
         },
     )
     assert enroll.status_code == 200
@@ -27,7 +27,7 @@ def test_agent_inventory_and_task_flow(
         headers=agent_headers,
         json={
             "hostname": "prod-01",
-            "agent_version": "0.5.1",
+            "agent_version": "0.5.2",
             "docker_version": "28.0.0",
             "os": "Linux / x86_64",
             "gpu_status": "ok",
@@ -242,3 +242,15 @@ def test_health_and_frontend(client: TestClient):
     page = client.get("/")
     assert page.status_code == 200
     assert "云舵" in page.text
+    assert 'id="new-user-access-mode"' in page.text
+    assert "下一步：绑定容器" in page.text
+
+    script = client.get("/assets/app.js")
+    assert script.status_code == 200
+    assert "await openAccess(created.id)" in script.text
+    assert "restricted:false,rules:[]" in script.text
+
+    style = client.get("/assets/app.css")
+    assert style.status_code == 200
+    assert ".container-main span{white-space:normal" in style.text
+    assert "overflow-wrap:anywhere" in style.text

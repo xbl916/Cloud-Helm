@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.5.1" in compose
+    assert f"cloud-helm-{service}:0.5.2" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose

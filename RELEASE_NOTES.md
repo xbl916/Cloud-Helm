@@ -1,4 +1,21 @@
-# Cloud Helm 0.5.1
+# Cloud Helm 0.5.2
+
+## H5 手机端与长镜像名
+
+- 页面根布局与容器卡片增加宽度约束，长容器名、镜像仓库和 Tag 会在卡片内自动换行，不再撑宽手机页面。
+- 同时兼容企微内置 WebView 对 `overflow-x: clip` 支持不足的情况，避免页面需要左右滚动。
+- CSS 与 JavaScript 静态资源 URL 加入 `0.5.2` 缓存标识，升级后不会继续命中旧版 H5 资源。
+
+## 创建用户时绑定资源
+
+- 添加用户时直接选择“自定义资源范围”或“全部资源”，不再只显示只读、运维和管理员角色。
+- 自定义范围创建成功后自动进入环境、节点、项目和容器授权界面；未勾选的资源保持不可见。
+- 管理员仍固定拥有全部资源；只读和运维角色负责限制操作能力，资源范围负责限制能看到哪些容器。
+
+## 小程序模板检查
+
+- 修复资源授权页和容器页中企微开发者工具无法解析的转义逻辑表达式。
+- 发布检查新增对应 WXML 回归规则，阻止相同模板错误再次进入发布包。
 
 ## 无残留初始化容器
 
@@ -21,7 +38,7 @@
 - GPU 运行方式支持 `linux/amd64` 与 `linux/arm64`；`linux/arm/v7` Agent 继续发布，但不承诺 NVIDIA GPU 监控。
 - 增加容器内 `nvidia-smi -L` 和 Agent GPU 上报的部署验收说明。
 
-`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.1 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
+`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.2 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
 
 ## 管理员同仓库换 Tag
 
@@ -45,9 +62,9 @@
 
 ## 发布产物
 
-- `cloudhelm-0.5.1.tar.gz`：架构无关源码与小程序发布包。
-- `cloudhelm-0.5.1.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.5.1`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.1`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
+- `cloudhelm-0.5.2.tar.gz`：架构无关源码与小程序发布包。
+- `cloudhelm-0.5.2.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.5.2`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.5.2`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
 发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。

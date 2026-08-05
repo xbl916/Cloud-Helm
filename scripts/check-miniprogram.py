@@ -14,7 +14,13 @@ def main() -> int:
             problems.append(f"invalid JSON {path.relative_to(root)}: {exc}")
     for path in root.rglob("*.wxml"):
         try:
-            source = path.read_text().replace("wx:", "wx_")
+            source = path.read_text()
+            if "&amp;&amp;" in source:
+                problems.append(
+                    f"unsupported escaped logical expression {path.relative_to(root)}: "
+                    "precompute or nest wx:if conditions instead"
+                )
+            source = source.replace("wx:", "wx_")
             ET.fromstring(f"<root>{source}</root>")
         except (OSError, ET.ParseError) as exc:
             problems.append(f"invalid WXML structure {path.relative_to(root)}: {exc}")

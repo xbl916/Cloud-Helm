@@ -3,8 +3,8 @@
   <view wx:if="{{error}}" class="error">{{error}}</view>
   <view class="card row"><view class="row-main"><view class="row-title">自定义资源范围</view><text class="row-subtitle">关闭后，该成员可以访问全部资源</text></view><switch checked="{{restricted}}" color="#118e83" bindchange="changeMode" /></view>
   <view wx:if="{{loading}}" class="loading">加载可授权资源…</view>
-  <view wx:elif="{{restricted &amp;&amp; !rows.length}}" class="empty">暂无资源，请等待 Agent 上报</view>
   <block wx:if="{{restricted}}">
+    <view wx:if="{{!rows.length}}" class="empty">暂无资源，请等待 Agent 上报</view>
     <view wx:for="{{rows}}" wx:key="scopeKey" class="card access-row depth-{{item.depth}}">
       <switch checked="{{item.checked}}" color="#118e83" data-index="{{index}}" bindchange="toggleRule" />
       <view class="row-main"><view class="row-title">{{item.label}}</view><text class="row-subtitle">{{item.note}}</text></view>
