@@ -352,7 +352,8 @@ CLOUDHELM_AGENT_REQUEST_TIMEOUT_SECONDS=20
 CLOUDHELM_AGENT_MAX_CONTAINERS=500
 CLOUDHELM_AGENT_DISK_QUERY_SECONDS=300
 CLOUDHELM_AGENT_HOST_ROOT_PATH=/host/rootfs-marker
-CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH=/host/network-dev
+CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH=/proc/net/dev
+CLOUDHELM_AGENT_NETWORK_INTERFACES=
 CLOUDHELM_AGENT_HOST_CPU_STATS_PATH=/host/proc-stat
 CLOUDHELM_AGENT_HOST_MEMORY_STATS_PATH=/host/meminfo
 CLOUDHELM_AGENT_HOST_LOAD_STATS_PATH=/host/loadavg
@@ -380,7 +381,8 @@ CLOUDHELM_AGENT_GPU_MAX_OUTPUT_BYTES=4194304
 |`CLOUDHELM_AGENT_MAX_CONTAINERS`|单节点一次最多采集的容器数量|默认 500，可设 1–2000|
 |`CLOUDHELM_AGENT_DISK_QUERY_SECONDS`|查询容器可写层磁盘大小的间隔|默认 300 秒，可设 60–3600；容器很多时可提高到 600 秒|
 |`CLOUDHELM_AGENT_HOST_ROOT_PATH`|根文件系统容量探针在 Agent 内的路径|保持 `/host/rootfs-marker`，与 Compose 的只读单文件挂载一致|
-|`CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH`|宿主机网络计数文件在 Agent 内的路径|保持 `/host/network-dev`|
+|`CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH`|宿主机网络计数文件在 Agent 内的路径|保持 `/proc/net/dev`；Agent 使用 host 网络读取宿主机视图|
+|`CLOUDHELM_AGENT_NETWORK_INTERFACES`|宿主机网卡显式名单|默认留空，自动选择 UP 且有可用 IP 的三层接口；也可填逗号分隔名单，如 `ens65f0np0,ens65f1np1`|
 |`CLOUDHELM_AGENT_HOST_CPU_STATS_PATH`|宿主机 CPU 计数文件在 Agent 内的路径|保持 `/host/proc-stat`|
 |`CLOUDHELM_AGENT_HOST_MEMORY_STATS_PATH`|宿主机内存信息文件在 Agent 内的路径|保持 `/host/meminfo`|
 |`CLOUDHELM_AGENT_HOST_LOAD_STATS_PATH`|宿主机负载文件在 Agent 内的路径|保持 `/host/loadavg`|
@@ -403,11 +405,15 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 
 首次成功日志应包含节点已注册以及容器数量已上报。回到云舵页面，节点应在一个上报周期内显示为在线。
 
-新版 `agent.compose.yml` 只读挂载宿主机 `/etc/hostname` 作为根文件系统容量探针，并分别只读挂载 `/proc/net/dev`、`/proc/stat`、`/proc/meminfo`、`/proc/loadavg`、`/proc/uptime` 读取主机指标；不会把整个宿主机根目录或完整 `/proc` 暴露给 Agent。Agent 本身继续使用只读根文件系统并清空 capabilities。若只升级镜像而没有更新 Compose，容器监控仍可上报，但页面会明确提示主机监控挂载不可用。
+新版 `agent.compose.yml` 使用 `network_mode: host`，让 Agent 的 `/proc/net/dev` 和固定命令 `ip -details -json address show up` 获得真实宿主机网络视图；Agent 不监听任何端口。其余主机指标仍通过 `/etc/hostname`、`/proc/stat`、`/proc/meminfo`、`/proc/loadavg`、`/proc/uptime` 的只读单文件挂载读取，不会挂载整个宿主机根目录或完整 `/proc`。Agent 本身继续使用只读根文件系统并清空 capabilities。若只升级镜像而没有更新 Compose，页面会明确提示主机监控不可用或仍可能读到容器自己的 `eth0`。
 
-网络速率由相邻两次计数计算，Agent 启动后的第一次上报为 `0 B/s`，下一个上报周期开始显示实时速率。主机聚合会排除 `lo`、Docker bridge、veth、CNI 等常见容器虚拟接口，避免重复计数。
+网络速率由相邻两次计数计算，Agent 启动后的第一次上报为 `0 B/s`，下一个上报周期开始显示实时速率。自动模式只选择处于 UP 状态、配置了非回环且非链路本地 IPv4/IPv6 地址的三层接口，并排除 Docker bridge、veth、CNI、隧道等常见虚拟接口。IP 在 `bond` 或 VLAN 接口上时统计该三层接口，不会重复统计没有 IP 的物理从接口。设置 `CLOUDHELM_AGENT_NETWORK_INTERFACES` 后以显式名单为准，但接口仍必须处于 UP 状态并配置可用 IP。
 
-页面同时显示主机 CPU、内存与 Swap、1/5/15 分钟负载、运行时间、根磁盘与 inode，以及容器 CPU、内存、网络、块 I/O、PID、重启次数、OOM、退出码和健康检查连续失败次数。容器磁盘数据来自 Docker `system df`：分别显示“可写层”和“镜像 + 可写层”，默认每 300 秒刷新。Docker volume、bind mount 和 tmpfs 属于容器外部存储，不计入容器可写层；它们所在文件系统的容量应通过节点磁盘或独立存储监控检查。
+节点页面会逐张显示选中网卡的名称、IP、实时收发速率和累计流量，同时显示所有选中接口的汇总收发。数据库历史仍只保存节点汇总值，不按网卡增加历史行数。
+
+页面同时显示主机 CPU、内存与 Swap、1/5/15 分钟负载、运行时间、根磁盘与 inode，以及容器 CPU、内存、网络、块 I/O、PID、重启次数、OOM、退出码和健康检查连续失败次数。普通 bridge、Compose、macvlan 等拥有独立网络命名空间的容器，其网络数据来自 Docker stats 并汇总该容器的所有网络端点，包含对外通信和容器间通信，不按宿主机物理网卡、目标地址、端口或协议拆分。业务容器若使用 `network_mode: host` 或与其他容器共享网络命名空间，Docker 无法可靠地按容器归因网络流量，页面可能显示为零或不完整，此时应参考节点汇总。
+
+容器磁盘数据来自 Docker `system df`：分别显示“可写层”和“镜像 + 可写层”，默认每 300 秒刷新。Docker volume、bind mount 和 tmpfs 属于容器外部存储，不计入容器可写层；它们所在文件系统的容量应通过节点磁盘或独立存储监控检查。
 
 Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样，H5 显示最近 24 小时曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON，并同时执行两个容量边界：删除 7 天前的数据，且全库最多保留最新 200000 行。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过硬上限，实际可查看时长会自动缩短。
 
@@ -513,6 +519,8 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 |Agent 出现 TLS 错误|证书链和域名是否正确；不要通过关闭 TLS 校验绕过|
 |节点注册但没有容器|Docker Socket 是否正确挂载，Agent 是否有读取 socket 的权限|
 |节点持续离线|节点到管理中心 443 是否可达，系统时间是否准确，查看 Agent 日志|
+|节点网卡只显示宿主机不存在的 `eth0`|必须使用新版 `agent.compose.yml` 的 `network_mode: host`，并确认 `CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH=/proc/net/dev` 后重新创建 Agent|
+|节点没有显示预期物理网卡|执行 `ip -br address`，确认接口处于 UP 且有可用 IP；bond/VLAN 场景应查看实际承载 IP 的三层接口，或配置 `CLOUDHELM_AGENT_NETWORK_INTERFACES`|
 |宿主机可运行 `nvidia-smi`，Agent 容器却没有该命令|是否同时使用 `agent.gpu.compose.yml`；执行 `nvidia-ctk runtime configure --runtime=docker` 后是否重启 Docker；`docker info` 是否列出 `nvidia` runtime|
 |容器内可运行 `nvidia-smi`，页面却提示 GPU 不可用|`CLOUDHELM_AGENT_NVIDIA_SMI_PATH` 是否为 `/usr/bin/nvidia-smi`，查看 Agent 日志中的 XML 解析、超时或输出上限错误|
 |页面有 GPU，但某容器显示未分配|Docker inspect 的 `HostConfig.DeviceRequests` 是否包含 NVIDIA GPU；旧式 runtime 则检查 `NVIDIA_VISIBLE_DEVICES`|
@@ -664,6 +672,8 @@ module.exports = {
 - 保持 Linux、Docker Engine 和容器运行时安全更新；
 - 生产与测试节点分开授权。
 
+为读取真实宿主机网卡和 IP，Agent 使用 host 网络命名空间。它不监听端口，但能连接宿主机只绑定 `127.0.0.1` 的服务；这些本地服务仍应启用自身认证，不要把“仅监听回环地址”作为对 Agent 的访问控制。Agent 已持有高权限 Docker Socket，因此必须继续只运行受信任镜像并限制节点登录权限。
+
 参考：[Docker Engine 安全说明](https://docs.docker.com/engine/security/)与[保护 Docker daemon socket](https://docs.docker.com/engine/security/protect-access/)。
 
 ### 3. 容器日志可能包含秘密
@@ -726,6 +736,13 @@ curl --fail https://ops.company.com/healthz
 日志中会逐项记录首次补充的监控列。再次重启不会重复迁移。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
 每台 Agent 节点也必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
+
+如果现有 `agent.env` 包含旧网络路径，必须改为以下值；需要固定网卡时再填写第二行，否则保持空值使用自动选择：
+
+```dotenv
+CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH=/proc/net/dev
+CLOUDHELM_AGENT_NETWORK_INTERFACES=
+```
 
 ```bash
 cd /实际路径/cloudhelm-0.5.2/deploy

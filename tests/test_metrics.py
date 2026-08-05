@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from cloudhelm_agent.config import AgentSettings
 from cloudhelm_agent.docker_runtime import DockerRuntime
 from cloudhelm_agent.system_monitor import SystemMonitor
 
@@ -10,9 +11,64 @@ def _network_payload(received: int, transmitted: int) -> str:
 Inter-|   Receive                                                |  Transmit
  face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed
     lo: 999 0 0 0 0 0 0 0 999 0 0 0 0 0 0 0
-  eth0: {received} 1 0 0 0 0 0 0 {transmitted} 1 0 0 0 0 0 0
+ens65f0np0: {received} 1 0 0 0 0 0 0 {transmitted} 1 0 0 0 0 0 0
+ens65f1np1: 3000 1 0 0 0 0 0 0 4000 1 0 0 0 0 0 0
+  eth0: 9000 1 0 0 0 0 0 0 8000 1 0 0 0 0 0 0
 docker0: 500 1 0 0 0 0 0 0 700 1 0 0 0 0 0 0
 """
+
+
+def _address_payload() -> list[dict]:
+    return [
+        {
+            "ifname": "ens65f0np0",
+            "flags": ["BROADCAST", "UP", "LOWER_UP"],
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "192.0.2.10",
+                    "prefixlen": 24,
+                    "scope": "global",
+                },
+                {
+                    "family": "inet6",
+                    "local": "fe80::1",
+                    "prefixlen": 64,
+                    "scope": "link",
+                },
+            ],
+        },
+        {
+            "ifname": "ens65f1np1",
+            "flags": ["BROADCAST", "UP", "LOWER_UP"],
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "198.51.100.10",
+                    "prefixlen": 24,
+                    "scope": "global",
+                }
+            ],
+        },
+        {
+            "ifname": "ens66f0",
+            "flags": ["BROADCAST", "UP", "LOWER_UP"],
+            "addr_info": [],
+        },
+        {
+            "ifname": "eth0",
+            "flags": ["BROADCAST", "UP", "LOWER_UP"],
+            "linkinfo": {"info_kind": "veth"},
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "172.18.0.2",
+                    "prefixlen": 16,
+                    "scope": "global",
+                }
+            ],
+        },
+    ]
 
 
 def _host_files(root: Path) -> tuple[Path, Path, Path, Path, Path]:
@@ -44,13 +100,34 @@ def test_system_monitor_reports_host_disk_and_network_rates(tmp_path: Path):
         memory_path,
         load_path,
         uptime_path,
+        address_query=_address_payload,
         clock=lambda: next(ticks),
     )
 
     first = monitor.snapshot()
     assert first.status == "ok"
     assert first.metrics["disk_total_bytes"] > 0
-    assert first.metrics["network_interfaces"] == ["eth0"]
+    assert first.metrics["network_interfaces"] == ["ens65f0np0", "ens65f1np1"]
+    assert first.metrics["network_rx_bytes"] == 4000
+    assert first.metrics["network_tx_bytes"] == 6000
+    assert first.metrics["network_interface_metrics"] == [
+        {
+            "name": "ens65f0np0",
+            "addresses": ["192.0.2.10/24"],
+            "rx_bytes": 1000,
+            "tx_bytes": 2000,
+            "rx_bps": 0.0,
+            "tx_bps": 0.0,
+        },
+        {
+            "name": "ens65f1np1",
+            "addresses": ["198.51.100.10/24"],
+            "rx_bytes": 3000,
+            "tx_bytes": 4000,
+            "rx_bps": 0.0,
+            "tx_bps": 0.0,
+        },
+    ]
     assert first.metrics["network_rx_bps"] == 0
     assert first.metrics["memory_percent"] == 40
     assert first.metrics["swap_used_bytes"] == 50000 * 1024
@@ -62,7 +139,62 @@ def test_system_monitor_reports_host_disk_and_network_rates(tmp_path: Path):
     second = monitor.snapshot()
     assert second.metrics["network_rx_bps"] == 500
     assert second.metrics["network_tx_bps"] == 300
+    assert second.metrics["network_interface_metrics"][0]["rx_bps"] == 500
     assert second.metrics["cpu_percent"] == 50
+
+
+def test_system_monitor_prefers_ip_bearing_l3_interface_and_allowlist():
+    payload = _address_payload() + [
+        {
+            "ifname": "bond0",
+            "flags": ["UP", "LOWER_UP"],
+            "linkinfo": {"info_kind": "bond"},
+            "addr_info": [
+                {
+                    "family": "inet",
+                    "local": "10.0.0.10",
+                    "prefixlen": 24,
+                    "scope": "global",
+                }
+            ],
+        }
+    ]
+    automatic = SystemMonitor._select_interfaces(payload)
+    assert automatic == {
+        "bond0": ["10.0.0.10/24"],
+        "ens65f0np0": ["192.0.2.10/24"],
+        "ens65f1np1": ["198.51.100.10/24"],
+    }
+    explicit = SystemMonitor._select_interfaces(payload, ("eth0",))
+    assert explicit == {"eth0": ["172.18.0.2/16"]}
+
+
+def test_agent_network_interface_allowlist_is_normalized():
+    settings = AgentSettings(
+        server_url="https://ops.example.com",
+        network_interfaces=" ens65f0np0,ens65f1np1,ens65f0np0 ",
+    )
+    assert settings.network_interface_allowlist == (
+        "ens65f0np0",
+        "ens65f1np1",
+    )
+
+
+@patch("cloudhelm_agent.system_monitor.subprocess.run")
+def test_system_monitor_uses_fixed_ip_address_query(run):
+    run.return_value = Mock(
+        returncode=0,
+        stdout='[{"ifname":"ens65f0np0","addr_info":[]}]',
+        stderr="",
+    )
+    assert SystemMonitor._query_interface_addresses()[0]["ifname"] == "ens65f0np0"
+    run.assert_called_once_with(
+        ["ip", "-details", "-json", "address", "show", "up"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
 
 
 def test_system_monitor_requires_host_mount(tmp_path: Path):

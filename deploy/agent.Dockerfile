@@ -11,12 +11,12 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY --from=builder /wheels /wheels
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends tzdata util-linux \
+    && apt-get install --yes --no-install-recommends iproute2 tzdata util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir /wheels/* \
     && rm -rf /wheels \
     && mkdir -p /data /host \
-    && touch /host/rootfs-marker /host/network-dev /host/proc-stat \
+    && touch /host/rootfs-marker /host/proc-stat \
       /host/meminfo /host/loadavg /host/uptime
 WORKDIR /app
 VOLUME ["/data"]

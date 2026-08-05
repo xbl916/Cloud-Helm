@@ -37,6 +37,7 @@ class Agent:
         self.system_monitor = SystemMonitor(
             host_root=settings.host_root_path,
             network_stats_path=settings.host_network_stats_path,
+            network_interfaces=settings.network_interface_allowlist,
             cpu_stats_path=settings.host_cpu_stats_path,
             memory_stats_path=settings.host_memory_stats_path,
             load_stats_path=settings.host_load_stats_path,

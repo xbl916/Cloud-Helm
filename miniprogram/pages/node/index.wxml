@@ -11,6 +11,14 @@
       <view class="metric"><view class="metric-label">根磁盘 / inode</view><text class="metric-value small">{{node.system.disk}}</text><text class="row-subtitle">可用 {{node.system.diskFree}} · inode {{node.system.inodes}}</text></view>
       <view class="metric"><view class="metric-label">交换区 / 运行时间</view><text class="metric-value small">{{node.system.swap}}</text><text class="row-subtitle">{{node.system.uptime}}</text></view>
     </view>
+    <block wx:if="{{node.system}}">
+      <view wx:if="{{node.system.interfaces.length}}" class="section-title">主机网卡</view>
+      <view wx:for="{{node.system.interfaces}}" wx:key="name" class="card interface-card">
+        <view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.addressText}}</text>
+        <text class="interface-rate">↓ {{item.receive}} · ↑ {{item.transmit}}</text>
+        <text class="row-subtitle">累计 ↓ {{item.receiveTotal}} · ↑ {{item.transmitTotal}}</text>
+      </view>
+    </block>
     <view wx:if="{{node.system_metrics_status === 'unavailable' || node.system_metrics_status === 'error'}}" class="error">主机监控：{{node.system_metrics_error || '等待新版 Agent 上报'}}</view>
     <view wx:if="{{node.gpu_error}}" class="error">GPU 监控：{{node.gpu_error}}</view>
     <view wx:if="{{node.gpus.length}}" class="section-title">NVIDIA GPU</view>

@@ -28,7 +28,15 @@ Page({
           receive: format.rate(raw.system_metrics.network_rx_bps),
           transmit: format.rate(raw.system_metrics.network_tx_bps),
           receiveTotal: format.bytes(raw.system_metrics.network_rx_bytes),
-          transmitTotal: format.bytes(raw.system_metrics.network_tx_bytes)
+          transmitTotal: format.bytes(raw.system_metrics.network_tx_bytes),
+          interfaces: (raw.system_metrics.network_interface_metrics || []).map(item => ({
+            ...item,
+            addressText: (item.addresses || []).join(" · "),
+            receive: format.rate(item.rx_bps),
+            transmit: format.rate(item.tx_bps),
+            receiveTotal: format.bytes(item.rx_bytes),
+            transmitTotal: format.bytes(item.tx_bytes)
+          }))
         } : null,
         gpus: (raw.gpus || []).map(gpu => ({
           ...gpu,

@@ -20,7 +20,8 @@ class AgentSettings(BaseSettings):
     max_containers: int = Field(default=500, ge=1, le=2000)
     disk_query_seconds: float = Field(default=300.0, ge=60, le=3600)
     host_root_path: Path = Path("/host/rootfs-marker")
-    host_network_stats_path: Path = Path("/host/network-dev")
+    host_network_stats_path: Path = Path("/proc/net/dev")
+    network_interfaces: str = Field(default="", max_length=4096)
     host_cpu_stats_path: Path = Path("/host/proc-stat")
     host_memory_stats_path: Path = Path("/host/meminfo")
     host_load_stats_path: Path = Path("/host/loadavg")
@@ -33,3 +34,13 @@ class AgentSettings(BaseSettings):
     @property
     def api_url(self) -> str:
         return self.server_url.rstrip("/") + "/api/v1"
+
+    @property
+    def network_interface_allowlist(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                name.strip()
+                for name in self.network_interfaces.split(",")
+                if name.strip()
+            )
+        )

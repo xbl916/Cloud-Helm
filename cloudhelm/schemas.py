@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -148,6 +148,17 @@ class GpuSnapshot(BaseModel):
     mig_mode: str | None = Field(default=None, max_length=40)
 
 
+class NetworkInterfaceMetricsSnapshot(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    addresses: list[Annotated[str, Field(max_length=80)]] = Field(
+        default_factory=list, max_length=16
+    )
+    rx_bytes: int = Field(default=0, ge=0)
+    tx_bytes: int = Field(default=0, ge=0)
+    rx_bps: float = Field(default=0, ge=0)
+    tx_bps: float = Field(default=0, ge=0)
+
+
 class SystemMetricsSnapshot(BaseModel):
     cpu_percent: float = Field(default=0, ge=0, le=100)
     memory_total_bytes: int = Field(default=0, ge=0)
@@ -171,6 +182,9 @@ class SystemMetricsSnapshot(BaseModel):
     network_rx_bps: float = Field(default=0, ge=0)
     network_tx_bps: float = Field(default=0, ge=0)
     network_interfaces: list[str] = Field(default_factory=list, max_length=128)
+    network_interface_metrics: list[NetworkInterfaceMetricsSnapshot] = Field(
+        default_factory=list, max_length=128
+    )
 
 
 class HeartbeatRequest(BaseModel):

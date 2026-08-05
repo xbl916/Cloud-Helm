@@ -39,7 +39,17 @@ def test_agent_inventory_and_task_flow(
                 "network_tx_bytes": 80000,
                 "network_rx_bps": 2048.5,
                 "network_tx_bps": 1024.25,
-                "network_interfaces": ["eth0"],
+                "network_interfaces": ["ens65f0np0"],
+                "network_interface_metrics": [
+                    {
+                        "name": "ens65f0np0",
+                        "addresses": ["192.0.2.10/24"],
+                        "rx_bytes": 120000,
+                        "tx_bytes": 80000,
+                        "rx_bps": 2048.5,
+                        "tx_bps": 1024.25,
+                    }
+                ],
                 "cpu_percent": 36.5,
                 "memory_total_bytes": 34359738368,
                 "memory_used_bytes": 12884901888,
@@ -137,6 +147,14 @@ def test_agent_inventory_and_task_flow(
     assert nodes.json()[0]["system_metrics_status"] == "ok"
     assert nodes.json()[0]["system_metrics"]["disk_used_bytes"] == 400000000
     assert nodes.json()[0]["system_metrics"]["cpu_percent"] == 36.5
+    assert nodes.json()[0]["system_metrics"]["network_interface_metrics"][0] == {
+        "name": "ens65f0np0",
+        "addresses": ["192.0.2.10/24"],
+        "rx_bytes": 120000,
+        "tx_bytes": 80000,
+        "rx_bps": 2048.5,
+        "tx_bps": 1024.25,
+    }
 
     dashboard = client.get("/api/v1/dashboard", headers=admin_headers)
     assert dashboard.status_code == 200
