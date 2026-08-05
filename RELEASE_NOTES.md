@@ -1,4 +1,17 @@
-# Cloud Helm 0.6.0
+# Cloud Helm 0.6.1
+
+## 主机物理网卡监控
+
+- Agent 使用宿主机网络命名空间采集实际网卡，不再把 Agent 容器内的 `eth0` 误认为主机网卡。
+- 自动选择已启用、配置了可用 IPv4 或 IPv6 地址的接口，并排除回环、Docker bridge、veth、CNI 等虚拟接口。
+- 支持通过 `CLOUDHELM_AGENT_NETWORK_INTERFACES` 显式指定网卡；显式配置仍要求接口已启用且具有可用 IP。
+- H5 和企业自用小程序展示每张入选网卡的名称、IP/CIDR、实时收发速率和累计流量，同时保留节点汇总流量。
+- 历史数据库只保存节点汇总值，不按网卡增加历史行或字段，避免扩大 SQLite/PostgreSQL 占用。
+
+## 容器网络监控
+
+- 容器网络流量仍来自 Docker stats，并汇总容器网络命名空间内的全部网络端点。
+- 使用 host 网络或共享其他容器网络命名空间时，Docker 可能无法提供独立容器流量；文档已明确这一限制。
 
 ## 主机与容器监控
 
@@ -30,9 +43,9 @@
 
 ## 发布产物
 
-- `cloudhelm-0.6.0.tar.gz`：架构无关源码、部署文件与小程序代码。
-- `cloudhelm-0.6.0.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.6.0`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.6.0`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
+- `cloudhelm-0.6.1.tar.gz`：架构无关源码、部署文件与小程序代码。
+- `cloudhelm-0.6.1.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.6.1`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.1`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
 发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。
