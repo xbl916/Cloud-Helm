@@ -15,4 +15,16 @@ function metric(value, suffix = "", digits = 0) {
   return value === null || value === undefined ? "—" : `${Number(value).toFixed(digits)}${suffix}`
 }
 
-module.exports = {bytes, time, metric}
+function rate(value) { return `${bytes(value)}/s` }
+
+function duration(value) {
+  const seconds = Math.max(0, Number(value || 0))
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor(seconds % 86400 / 3600)
+  const minutes = Math.floor(seconds % 3600 / 60)
+  if (days) return `${days} 天 ${hours} 小时`
+  if (hours) return `${hours} 小时 ${minutes} 分钟`
+  return `${minutes} 分钟`
+}
+
+module.exports = {bytes, time, metric, rate, duration}

@@ -4,7 +4,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/agent.Dockerfile
-    image: ghcr.io/xbl916/cloud-helm-agent:0.5.2
+    image: ghcr.io/xbl916/cloud-helm-agent:0.6.0
     restart: unless-stopped
     init: true
     read_only: true
@@ -12,6 +12,12 @@ services:
       - agent.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/hostname:/host/rootfs-marker:ro
+      - /proc/net/dev:/host/network-dev:ro
+      - /proc/stat:/host/proc-stat:ro
+      - /proc/meminfo:/host/meminfo:ro
+      - /proc/loadavg:/host/loadavg:ro
+      - /proc/uptime:/host/uptime:ro
       - ./cloudhelm-data:/data
     tmpfs:
       - /tmp:size=64m,mode=1777

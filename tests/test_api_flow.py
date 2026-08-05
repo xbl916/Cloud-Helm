@@ -30,6 +30,31 @@ def test_agent_inventory_and_task_flow(
             "agent_version": "0.5.2",
             "docker_version": "28.0.0",
             "os": "Linux / x86_64",
+            "system_metrics_status": "ok",
+            "system_metrics": {
+                "disk_total_bytes": 1000000000,
+                "disk_used_bytes": 400000000,
+                "disk_free_bytes": 600000000,
+                "network_rx_bytes": 120000,
+                "network_tx_bytes": 80000,
+                "network_rx_bps": 2048.5,
+                "network_tx_bps": 1024.25,
+                "network_interfaces": ["eth0"],
+                "cpu_percent": 36.5,
+                "memory_total_bytes": 34359738368,
+                "memory_used_bytes": 12884901888,
+                "memory_available_bytes": 21474836480,
+                "memory_percent": 37.5,
+                "swap_total_bytes": 4294967296,
+                "swap_used_bytes": 1073741824,
+                "load_1": 1.2,
+                "load_5": 0.8,
+                "load_15": 0.5,
+                "uptime_seconds": 86400,
+                "disk_inodes_total": 1000000,
+                "disk_inodes_used": 250000,
+                "disk_inodes_free": 750000,
+            },
             "gpu_status": "ok",
             "gpus": [
                 {
@@ -69,6 +94,20 @@ def test_agent_inventory_and_task_flow(
                     "memory_usage": 104857600,
                     "memory_limit": 536870912,
                     "memory_percent": 19.53,
+                    "network_rx_bytes": 50000,
+                    "network_tx_bytes": 25000,
+                    "network_rx_bps": 512.5,
+                    "network_tx_bps": 256.25,
+                    "writable_layer_bytes": 1048576,
+                    "rootfs_bytes": 52428800,
+                    "block_read_bytes": 2097152,
+                    "block_write_bytes": 3145728,
+                    "block_read_bps": 1024.5,
+                    "block_write_bps": 2048.25,
+                    "pids": 12,
+                    "restart_count": 2,
+                    "oom_killed": False,
+                    "health_failing_streak": 0,
                     "gpu_devices": ["0"],
                 },
                 {
@@ -95,6 +134,9 @@ def test_agent_inventory_and_task_flow(
     assert nodes.json()[0]["container_count"] == 2
     assert nodes.json()[0]["gpu_status"] == "ok"
     assert nodes.json()[0]["gpus"][0]["uuid"] == "GPU-12345678"
+    assert nodes.json()[0]["system_metrics_status"] == "ok"
+    assert nodes.json()[0]["system_metrics"]["disk_used_bytes"] == 400000000
+    assert nodes.json()[0]["system_metrics"]["cpu_percent"] == 36.5
 
     dashboard = client.get("/api/v1/dashboard", headers=admin_headers)
     assert dashboard.status_code == 200
@@ -105,6 +147,8 @@ def test_agent_inventory_and_task_flow(
         "memory_used_mib": 3072,
         "memory_total_mib": 72174,
     }
+    assert dashboard.json()["system"]["network_rx_bps"] == 2048.5
+    assert dashboard.json()["system"]["disk_total_bytes"] == 1000000000
 
     containers = client.get(
         f"/api/v1/nodes/{credentials['node_id']}/containers", headers=admin_headers
@@ -118,6 +162,24 @@ def test_agent_inventory_and_task_flow(
     assert container["compose_project"] == "web"
     assert container["gpu_devices"] == ["0"]
     assert container["gpu_all"] is False
+    assert container["network_rx_bps"] == 512.5
+    assert container["writable_layer_bytes"] == 1048576
+    assert container["block_write_bps"] == 2048.25
+    assert container["pids"] == 12
+    assert container["restart_count"] == 2
+
+    node_history = client.get(
+        f"/api/v1/nodes/{credentials['node_id']}/metrics/history",
+        headers=admin_headers,
+    )
+    assert node_history.status_code == 200
+    assert node_history.json()[0]["cpu_percent"] == 36.5
+    container_history = client.get(
+        f"/api/v1/containers/{container['id']}/metrics/history",
+        headers=admin_headers,
+    )
+    assert container_history.status_code == 200
+    assert container_history.json()[0]["block_write_bps"] == 2048.25
 
     queued = client.post(
         f"/api/v1/containers/{container['id']}/actions",
@@ -183,8 +245,18 @@ def test_agent_inventory_and_task_flow(
     assert viewer_nodes.json()[0]["container_count"] == 1
     assert viewer_nodes.json()[0]["gpu_status"] == "ok"
     assert [gpu["uuid"] for gpu in viewer_nodes.json()[0]["gpus"]] == ["GPU-12345678"]
+    assert viewer_nodes.json()[0]["system_metrics_status"] == "restricted"
+    assert viewer_nodes.json()[0]["system_metrics"] == {}
+    assert (
+        client.get(
+            f"/api/v1/nodes/{credentials['node_id']}/metrics/history",
+            headers=viewer_headers,
+        ).status_code
+        == 404
+    )
     viewer_dashboard = client.get("/api/v1/dashboard", headers=viewer_headers)
     assert viewer_dashboard.json()["gpus"]["total"] == 1
+    assert viewer_dashboard.json()["system"]["node_count"] == 0
     viewer_container = client.get(
         f"/api/v1/containers/{container['id']}", headers=viewer_headers
     )
@@ -195,6 +267,13 @@ def test_agent_inventory_and_task_flow(
         f"/api/v1/nodes/{credentials['node_id']}/containers", headers=viewer_headers
     )
     assert [item["name"] for item in viewer_containers.json()] == ["web-api"]
+    assert (
+        client.get(
+            f"/api/v1/containers/{container['id']}/metrics/history",
+            headers=viewer_headers,
+        ).status_code
+        == 200
+    )
     assert (
         client.get(
             f"/api/v1/containers/{hidden_container['id']}", headers=viewer_headers
@@ -249,6 +328,8 @@ def test_health_and_frontend(client: TestClient):
     assert script.status_code == 200
     assert "await openAccess(created.id)" in script.text
     assert "restricted:false,rules:[]" in script.text
+    assert "renderNodeSystem(node)" in script.text
+    assert "writable_layer_bytes" in script.text
 
     style = client.get("/assets/app.css")
     assert style.status_code == 200

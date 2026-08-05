@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.5.2" in compose
+    assert f"cloud-helm-{service}:0.6.0" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -53,3 +53,20 @@ def test_agent_entrypoint_drops_all_capabilities():
     script = (ROOT / "deploy/agent-entrypoint.sh").read_text(encoding="utf-8")
     assert "chown -R 0:0 /data" in script
     assert "--bounding-set=-all" in script
+
+
+def test_agent_compose_mounts_host_read_only_for_system_metrics():
+    compose = (ROOT / "deploy/agent.compose.yml").read_text(encoding="utf-8")
+    assert "- /etc/hostname:/host/rootfs-marker:ro" in compose
+    assert "- /proc/net/dev:/host/network-dev:ro" in compose
+    assert "- /proc/stat:/host/proc-stat:ro" in compose
+    assert "- /proc/meminfo:/host/meminfo:ro" in compose
+    assert "- /proc/loadavg:/host/loadavg:ro" in compose
+    assert "- /proc/uptime:/host/uptime:ro" in compose
+    assert "- /:/host:ro" not in compose
+    environment = (ROOT / "deploy/agent.env.example").read_text(encoding="utf-8")
+    assert "CLOUDHELM_AGENT_HOST_ROOT_PATH=/host/rootfs-marker" in environment
+    assert "CLOUDHELM_AGENT_HOST_CPU_STATS_PATH=/host/proc-stat" in environment
+    assert "CLOUDHELM_AGENT_HOST_MEMORY_STATS_PATH=/host/meminfo" in environment
+    assert "CLOUDHELM_AGENT_HOST_LOAD_STATS_PATH=/host/loadavg" in environment
+    assert "CLOUDHELM_AGENT_HOST_UPTIME_STATS_PATH=/host/uptime" in environment

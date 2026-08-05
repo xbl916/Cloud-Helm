@@ -2,14 +2,24 @@
   <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">读取容器详情…</view>
   <block wx:elif="{{container}}">
     <view class="hero"><view class="eyebrow">{{container.status}} · {{container.health || 'NO HEALTHCHECK'}}</view><view class="title">{{container.name}}</view><view class="subtitle">{{container.node_name}} / {{container.compose_project || '独立容器'}}</view></view>
+    <view wx:if="{{container.oom_killed}}" class="error">容器最近一次退出由 OOM Kill 导致，请检查内存限制和主机内存。</view>
+    <view wx:if="{{container.health === 'unhealthy'}}" class="error">健康检查失败 {{container.health_failing_streak}} 次。</view>
     <view class="metric-grid">
       <view class="metric"><view class="metric-label">CPU 使用率</view><text class="metric-value small">{{container.cpu_percent}}%</text></view>
       <view class="metric"><view class="metric-label">内存</view><text class="metric-value small">{{container.memory}}</text></view>
       <view class="metric"><view class="metric-label">内存占比</view><text class="metric-value small">{{container.memory_percent}}%</text></view>
       <view class="metric"><view class="metric-label">GPU 分配</view><text class="metric-value small">{{container.gpuText}}</text></view>
+      <view class="metric"><view class="metric-label">网络接收</view><text class="metric-value small">↓ {{container.networkReceive}}</text></view>
+      <view class="metric"><view class="metric-label">网络发送</view><text class="metric-value small">↑ {{container.networkTransmit}}</text></view>
+      <view class="metric"><view class="metric-label">可写层磁盘</view><text class="metric-value small">{{container.writableLayer}}</text></view>
+      <view class="metric"><view class="metric-label">镜像 + 可写层</view><text class="metric-value small">{{container.rootfs}}</text></view>
+      <view class="metric"><view class="metric-label">块读取</view><text class="metric-value small">{{container.blockRead}}</text></view>
+      <view class="metric"><view class="metric-label">块写入</view><text class="metric-value small">{{container.blockWrite}}</text></view>
+      <view class="metric"><view class="metric-label">PID 数</view><text class="metric-value small">{{container.pids}}</text></view>
+      <view class="metric"><view class="metric-label">重启次数</view><text class="metric-value small">{{container.restart_count}}</text></view>
     </view>
     <view class="section-title">运行信息</view>
-    <view class="card details"><view><text>镜像</text><text>{{container.image || '—'}}</text></view><view><text>Compose 服务</text><text>{{container.compose_service || '—'}}</text></view><view><text>容器 ID</text><text class="mono">{{container.docker_id}}</text></view><view><text>状态更新</text><text>{{container.updated}}</text></view></view>
+    <view class="card details"><view><text>累计网络</text><text>↓ {{container.networkReceiveTotal}} / ↑ {{container.networkTransmitTotal}}</text></view><view><text>累计块 I/O</text><text>读 {{container.blockReadTotal}} / 写 {{container.blockWriteTotal}}</text></view><view wx:if="{{container.status !== 'running'}}"><text>退出状态</text><text>代码 {{container.exit_code}} · {{container.finishedAt}}</text></view><view><text>镜像</text><text>{{container.image || '—'}}</text></view><view><text>Compose 服务</text><text>{{container.compose_service || '—'}}</text></view><view><text>容器 ID</text><text class="mono">{{container.docker_id}}</text></view><view><text>状态更新</text><text>{{container.updated}}</text></view></view>
     <block wx:if="{{container.permissions.update_image}}">
       <view wx:if="{{container.imageRepository}}" class="card image-update">
         <view class="row-title">管理员 · 替换镜像 Tag</view>

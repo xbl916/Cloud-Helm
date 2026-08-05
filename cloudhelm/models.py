@@ -3,11 +3,13 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -116,6 +118,19 @@ class Node(Base):
     gpu_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    system_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    system_metrics_status: Mapped[str] = mapped_column(
+        String(20), default="unavailable"
+    )
+    system_metrics_error: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    system_metrics_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    metrics_history_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
@@ -147,6 +162,22 @@ class Container(Base):
     memory_usage: Mapped[int] = mapped_column(Integer, default=0)
     memory_limit: Mapped[int] = mapped_column(Integer, default=0)
     memory_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    network_rx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    network_tx_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    network_rx_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    network_tx_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    writable_layer_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    rootfs_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    block_read_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    block_write_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    block_read_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    block_write_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    pids: Mapped[int] = mapped_column(Integer, default=0)
+    restart_count: Mapped[int] = mapped_column(Integer, default=0)
+    oom_killed: Mapped[bool] = mapped_column(Boolean, default=False)
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    finished_at: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    health_failing_streak: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[str | None] = mapped_column(String(60), nullable=True)
     ports_json: Mapped[str] = mapped_column(Text, default="{}")
     labels_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -186,6 +217,36 @@ class Task(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class MetricSample(Base):
+    __tablename__ = "metric_samples"
+    __table_args__ = (
+        Index(
+            "ix_metric_samples_target_time",
+            "target_type",
+            "target_id",
+            "sampled_at",
+        ),
+        Index("ix_metric_samples_sampled_at", "sampled_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String(10))
+    target_id: Mapped[str] = mapped_column(String(36))
+    node_id: Mapped[str] = mapped_column(String(36))
+    sampled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cpu_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_usage: Mapped[int] = mapped_column(BigInteger, default=0)
+    memory_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    network_rx_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    network_tx_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    disk_used_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    disk_total_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    block_read_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    block_write_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    pids: Mapped[int] = mapped_column(Integer, default=0)
+    restart_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AuditLog(Base):

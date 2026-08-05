@@ -108,6 +108,22 @@ class ContainerSnapshot(BaseModel):
     memory_usage: int = Field(default=0, ge=0)
     memory_limit: int = Field(default=0, ge=0)
     memory_percent: float = Field(default=0, ge=0, le=100000)
+    network_rx_bytes: int = Field(default=0, ge=0)
+    network_tx_bytes: int = Field(default=0, ge=0)
+    network_rx_bps: float = Field(default=0, ge=0)
+    network_tx_bps: float = Field(default=0, ge=0)
+    writable_layer_bytes: int = Field(default=0, ge=0)
+    rootfs_bytes: int = Field(default=0, ge=0)
+    block_read_bytes: int = Field(default=0, ge=0)
+    block_write_bytes: int = Field(default=0, ge=0)
+    block_read_bps: float = Field(default=0, ge=0)
+    block_write_bps: float = Field(default=0, ge=0)
+    pids: int = Field(default=0, ge=0)
+    restart_count: int = Field(default=0, ge=0)
+    oom_killed: bool = False
+    exit_code: int | None = None
+    finished_at: str | None = Field(default=None, max_length=60)
+    health_failing_streak: int = Field(default=0, ge=0)
     started_at: str | None = Field(default=None, max_length=60)
     ports: dict[str, Any] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -132,6 +148,31 @@ class GpuSnapshot(BaseModel):
     mig_mode: str | None = Field(default=None, max_length=40)
 
 
+class SystemMetricsSnapshot(BaseModel):
+    cpu_percent: float = Field(default=0, ge=0, le=100)
+    memory_total_bytes: int = Field(default=0, ge=0)
+    memory_used_bytes: int = Field(default=0, ge=0)
+    memory_available_bytes: int = Field(default=0, ge=0)
+    memory_percent: float = Field(default=0, ge=0, le=100)
+    swap_total_bytes: int = Field(default=0, ge=0)
+    swap_used_bytes: int = Field(default=0, ge=0)
+    load_1: float = Field(default=0, ge=0)
+    load_5: float = Field(default=0, ge=0)
+    load_15: float = Field(default=0, ge=0)
+    uptime_seconds: float = Field(default=0, ge=0)
+    disk_total_bytes: int = Field(default=0, ge=0)
+    disk_used_bytes: int = Field(default=0, ge=0)
+    disk_free_bytes: int = Field(default=0, ge=0)
+    disk_inodes_total: int = Field(default=0, ge=0)
+    disk_inodes_used: int = Field(default=0, ge=0)
+    disk_inodes_free: int = Field(default=0, ge=0)
+    network_rx_bytes: int = Field(default=0, ge=0)
+    network_tx_bytes: int = Field(default=0, ge=0)
+    network_rx_bps: float = Field(default=0, ge=0)
+    network_tx_bps: float = Field(default=0, ge=0)
+    network_interfaces: list[str] = Field(default_factory=list, max_length=128)
+
+
 class HeartbeatRequest(BaseModel):
     hostname: str = Field(default="", max_length=255)
     agent_version: str = Field(default="unknown", max_length=30)
@@ -140,6 +181,11 @@ class HeartbeatRequest(BaseModel):
     gpu_status: Literal["ok", "unavailable", "error", "disabled"] = "unavailable"
     gpu_error: str | None = Field(default=None, max_length=500)
     gpus: list[GpuSnapshot] = Field(default_factory=list, max_length=128)
+    system_metrics_status: Literal["ok", "unavailable", "error"] = "unavailable"
+    system_metrics_error: str | None = Field(default=None, max_length=500)
+    system_metrics: SystemMetricsSnapshot = Field(
+        default_factory=SystemMetricsSnapshot
+    )
     containers: list[ContainerSnapshot] = Field(default_factory=list, max_length=2000)
 
 

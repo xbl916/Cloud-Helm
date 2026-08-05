@@ -13,6 +13,7 @@ from cloudhelm_agent import __version__
 from cloudhelm_agent.config import AgentSettings
 from cloudhelm_agent.docker_runtime import DockerRuntime
 from cloudhelm_agent.gpu_monitor import GpuMonitor
+from cloudhelm_agent.system_monitor import SystemMonitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,12 +25,22 @@ logger = logging.getLogger("cloudhelm-agent")
 class Agent:
     def __init__(self, settings: AgentSettings):
         self.settings = settings
-        self.runtime = DockerRuntime(settings.max_containers)
+        self.runtime = DockerRuntime(
+            settings.max_containers, settings.disk_query_seconds
+        )
         self.gpu_monitor = GpuMonitor(
             enabled=settings.gpu_monitoring_enabled,
             executable=settings.nvidia_smi_path,
             timeout_seconds=settings.gpu_query_timeout_seconds,
             max_output_bytes=settings.gpu_max_output_bytes,
+        )
+        self.system_monitor = SystemMonitor(
+            host_root=settings.host_root_path,
+            network_stats_path=settings.host_network_stats_path,
+            cpu_stats_path=settings.host_cpu_stats_path,
+            memory_stats_path=settings.host_memory_stats_path,
+            load_stats_path=settings.host_load_stats_path,
+            uptime_stats_path=settings.host_uptime_stats_path,
         )
         self.stop_event = Event()
         self.state = self._load_state()
@@ -95,6 +106,7 @@ class Agent:
     def report(self) -> None:
         runtime_info = self.runtime.info()
         gpu = self.gpu_monitor.snapshot()
+        system = self.system_monitor.snapshot()
         payload = {
             "hostname": socket.gethostname(),
             "agent_version": __version__,
@@ -103,6 +115,9 @@ class Agent:
             "gpu_status": gpu.status,
             "gpu_error": gpu.error,
             "gpus": gpu.gpus,
+            "system_metrics_status": system.status,
+            "system_metrics_error": system.error,
+            "system_metrics": system.metrics,
             "containers": self.runtime.inventory(),
         }
         response = self.client.post(
@@ -114,6 +129,8 @@ class Agent:
             logger.info("Reported %d NVIDIA GPUs", len(gpu.gpus))
         elif gpu.status == "error":
             logger.warning("GPU monitoring failed: %s", gpu.error)
+        if system.status != "ok":
+            logger.warning("Host monitoring unavailable: %s", system.error)
 
     def poll_task(self) -> None:
         response = self.client.get("/agent/tasks/next", headers=self._headers())

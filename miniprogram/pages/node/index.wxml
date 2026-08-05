@@ -2,6 +2,16 @@
   <view wx:if="{{error}}" class="error">{{error}}</view><view wx:if="{{loading}}" class="loading">读取节点状态…</view>
   <block wx:elif="{{node}}">
     <view class="hero"><view class="eyebrow">{{node.environment}} · {{node.online ? 'ONLINE' : 'OFFLINE'}}</view><view class="title">{{node.name}}</view><view class="subtitle">{{node.hostname}} · Docker {{node.docker_version}} · {{node.lastSeen}}</view></view>
+    <view wx:if="{{node.system}}" class="section-title">主机资源</view>
+    <view wx:if="{{node.system}}" class="metric-grid">
+      <view class="metric"><view class="metric-label">CPU / 负载</view><text class="metric-value small">{{node.system.cpu}}</text><text class="row-subtitle">{{node.system.load}}</text></view>
+      <view class="metric"><view class="metric-label">内存</view><text class="metric-value small">{{node.system.memoryPercent}}</text><text class="row-subtitle">{{node.system.memory}}</text></view>
+      <view class="metric"><view class="metric-label">网络接收</view><text class="metric-value small">↓ {{node.system.receive}}</text><text class="row-subtitle">累计 {{node.system.receiveTotal}}</text></view>
+      <view class="metric"><view class="metric-label">网络发送</view><text class="metric-value small">↑ {{node.system.transmit}}</text><text class="row-subtitle">累计 {{node.system.transmitTotal}}</text></view>
+      <view class="metric"><view class="metric-label">根磁盘 / inode</view><text class="metric-value small">{{node.system.disk}}</text><text class="row-subtitle">可用 {{node.system.diskFree}} · inode {{node.system.inodes}}</text></view>
+      <view class="metric"><view class="metric-label">交换区 / 运行时间</view><text class="metric-value small">{{node.system.swap}}</text><text class="row-subtitle">{{node.system.uptime}}</text></view>
+    </view>
+    <view wx:if="{{node.system_metrics_status === 'unavailable' || node.system_metrics_status === 'error'}}" class="error">主机监控：{{node.system_metrics_error || '等待新版 Agent 上报'}}</view>
     <view wx:if="{{node.gpu_error}}" class="error">GPU 监控：{{node.gpu_error}}</view>
     <view wx:if="{{node.gpus.length}}" class="section-title">NVIDIA GPU</view>
     <view wx:for="{{node.gpus}}" wx:key="uuid" class="card gpu">
@@ -12,7 +22,7 @@
     <view wx:if="{{!containers.length}}" class="empty">此节点没有可见容器</view>
     <view wx:for="{{containers}}" wx:key="id" class="card row" data-id="{{item.id}}" bindtap="openContainer">
       <view class="state {{item.status === 'running' ? 'running' : ''}}"></view>
-      <view class="row-main"><view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.compose_project || '独立容器'}} · CPU {{item.cpu_percent}}% · {{item.memory}}</text><text wx:if="{{item.gpu}}" class="gpu-label">GPU {{item.gpu}}</text></view>
+      <view class="row-main"><view class="row-title">{{item.name}}</view><text class="row-subtitle">{{item.compose_project || '独立容器'}} · CPU {{item.cpu_percent}}% · {{item.memory}}</text><text class="row-subtitle">{{item.network}} · 磁盘 {{item.disk}}</text><text class="row-subtitle">块 I/O {{item.block}} · PID {{item.pids}} · 重启 {{item.restart_count}}</text><text wx:if="{{item.alert}}" class="alert-label">{{item.alert}}</text><text wx:if="{{item.gpu}}" class="gpu-label">GPU {{item.gpu}}</text></view>
       <text class="arrow">›</text>
     </view>
   </block>

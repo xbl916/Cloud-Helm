@@ -1,70 +1,38 @@
-# Cloud Helm 0.5.2
+# Cloud Helm 0.6.0
 
-## H5 手机端与长镜像名
+## 主机与容器监控
 
-- 页面根布局与容器卡片增加宽度约束，长容器名、镜像仓库和 Tag 会在卡片内自动换行，不再撑宽手机页面。
-- 同时兼容企微内置 WebView 对 `overflow-x: clip` 支持不足的情况，避免页面需要左右滚动。
-- CSS 与 JavaScript 静态资源 URL 加入 `0.5.2` 缓存标识，升级后不会继续命中旧版 H5 资源。
+- Agent 新增主机 CPU、内存、Swap、1/5/15 分钟负载、运行时间、根磁盘、inode 和网络流量采集。
+- 容器新增网络流量、块 I/O、可写层与 rootfs 空间、PID、重启次数、OOM、退出码和健康检查连续失败次数。
+- 容器可写层容量查询默认从每 60 秒降低到每 300 秒，减少 Docker daemon 在容器较多节点上的扫描开销。
+- 主机采集只读挂载需要的 `/proc` 单文件和根文件系统探针，不挂载完整宿主机根目录或完整 `/proc`。
 
-## 创建用户时绑定资源
+## 有界历史与数据库容量
 
-- 添加用户时直接选择“自定义资源范围”或“全部资源”，不再只显示只读、运维和管理员角色。
-- 自定义范围创建成功后自动进入环境、节点、项目和容器授权界面；未勾选的资源保持不可见。
-- 管理员仍固定拥有全部资源；只读和运维角色负责限制操作能力，资源范围负责限制能看到哪些容器。
+- Server 新增节点和容器数值历史，默认每 5 分钟采样、保留 7 天，并设置全库 20 万行硬上限。
+- 历史表不重复保存容器名、镜像名或心跳原始 JSON；到达时间或行数边界后自动删除最旧数据。
+- 保留时间可配置为最长 365 天，行数上限可配置为最多 2000 万，方便 PostgreSQL 部署按容量保存半年或一年。
+- SQLite 删除后的空闲页由后续写入复用，不在心跳路径自动执行可能长时间锁库的 `VACUUM`。
 
-## 小程序模板检查
+## 页面与权限
 
-- 修复资源授权页和容器页中企微开发者工具无法解析的转义逻辑表达式。
-- 发布检查新增对应 WXML 回归规则，阻止相同模板错误再次进入发布包。
+- H5 节点页和容器详情新增最近 24 小时 CPU、内存、网络与磁盘趋势图。
+- H5 和企业自用小程序展示新增实时指标，并对高磁盘、高 inode、高内存、OOM、健康检查失败和反复重启作醒目标记。
+- 节点级历史继续要求节点监控权限；仅获单个容器授权的用户只能读取对应容器历史。
+- H5 继续针对手机视口和长容器名、长镜像名自适应，不需要左右滚动。
 
-## 无残留初始化容器
+## 0.5.2 SQLite 原地升级
 
-- Server 与 Agent Compose 删除一次性 `data-init` 服务，启动后不再留下 `Exited (0)` 容器。
-- Server 主容器只在入口阶段使用最小文件权限能力修复 `/data`，随后切换到 UID/GID `10001` 并清空全部 Linux capabilities 后启动应用。
-- Agent 主容器初始化自己的 root 状态目录后立即清空全部 Linux capabilities；Docker Socket 访问方式保持不变。
-- 使用 `docker compose up -d --remove-orphans` 升级时会自动删除旧版遗留的 `data-init` 容器，不影响宿主机 `cloudhelm-data` 数据。
-
-## 企业自用小程序
-
-- 新增原生企业微信小程序前端，包含总览、节点、容器、NVIDIA GPU、日志、启停/重启、审计以及用户资源授权。
-- 新增 `wx.qy.login()` 服务端登录接口；Server 使用关联小程序在当前企业下的独立 Secret 换取并校验 `CorpId` 与 `UserId`。
-- 小程序使用短期随机 Bearer 会话，不在客户端保存企业 Secret、Agent 凭据、Docker 凭据或自包含权限令牌。
-- 小程序与 H5 共用现有用户、容器范围、会话撤销和审计模型；未绑定、已停用或越权成员继续默认拒绝。
-
-## NVIDIA Agent 修复
-
-- GPU overlay 显式选择 `nvidia` OCI runtime，确保 NVIDIA Container Toolkit 注入与宿主机驱动匹配的 `/usr/bin/nvidia-smi` 和 NVML 库。
-- 保留 `NVIDIA_VISIBLE_DEVICES=all` 和最小 `NVIDIA_DRIVER_CAPABILITIES=utility`，Agent 不需要完整 CUDA 工具链。
-- GPU 运行方式支持 `linux/amd64` 与 `linux/arm64`；`linux/arm/v7` Agent 继续发布，但不承诺 NVIDIA GPU 监控。
-- 增加容器内 `nvidia-smi -L` 和 Agent GPU 上报的部署验收说明。
-
-`nvidia-smi` 属于宿主机驱动工具，不能在镜像中固定一个可能与宿主机驱动不兼容的版本。0.5.2 使用 NVIDIA 官方推荐的运行时注入方式；节点仍必须安装并通过 `nvidia-ctk runtime configure --runtime=docker` 正确配置 NVIDIA Container Toolkit。
-
-## 管理员同仓库换 Tag
-
-- H5 与企业自用小程序新增管理员镜像更新入口，填写新 Tag 后必须再次核对原镜像和目标镜像。
-- Server 与 Agent 双重限制只能更换同一 registry/namespace/repository 的不同 Tag；普通运维角色、digest、同 Tag 和跨仓库替换都会被拒绝。
-- Agent 先拉取镜像，再按原配置重建容器；保留端口、卷、网络、GPU、资源限制、重启策略及 Compose 标签，创建或启动失败时自动恢复旧容器。
-- 替换成功后 Server 延续原容器记录并更新 Docker ID，避免资源授权因容器重建失效。
-- 自动删除、静态 IP 和 Agent 自身容器不允许在线替换；Compose 文件仍需管理员在验证后手工同步新 Tag。
-
-## H5 移动端自适应
-
-- 针对 320–480px 手机视口重新约束总览、节点、GPU、容器详情、用户权限、审计、弹窗和底部操作区。
-- 长镜像名、GPU 型号、时间和权限按钮可换行或收缩，页面根布局不再产生横向滚动。
-
-## 部署和质量保障
-
-- README 补充企业自用小程序注册、关联、Secret、合法域名、体验版和正式发布流程。
-- README 补充容器化 Caddy 的共享网络方式，避免在 Caddy 容器内错误代理 `127.0.0.1:8080`。
-- CI 新增小程序 JavaScript、JSON、WXML 和 WXSS 语法检查。
-- 服务端认证、权限、GPU、Agent 任务及小程序会话测试保持全量通过。
+- Server 启动时自动、幂等地补充 `nodes`、`containers` 监控列并创建 `metric_samples` 表。
+- 不重建已有表，不清空用户、企微身份、资源授权、节点、容器、Agent 凭据或审计记录。
+- 现有 `.env` 不增加历史变量也能启动并使用保守默认值；升级前仍建议停止 Server 后备份 `cloudhelm-data`。
+- Agent 必须同步新版 `agent.compose.yml` 才能获得完整主机指标；已有节点凭据目录可以原样保留。
 
 ## 发布产物
 
-- `cloudhelm-0.5.2.tar.gz`：架构无关源码与小程序发布包。
-- `cloudhelm-0.5.2.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.5.2`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.2`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
+- `cloudhelm-0.6.0.tar.gz`：架构无关源码、部署文件与小程序代码。
+- `cloudhelm-0.6.0.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.6.0`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.0`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
 发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。

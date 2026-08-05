@@ -18,6 +18,13 @@ class AgentSettings(BaseSettings):
     request_timeout_seconds: float = Field(default=20.0, ge=3, le=120)
     verify_tls: bool = True
     max_containers: int = Field(default=500, ge=1, le=2000)
+    disk_query_seconds: float = Field(default=300.0, ge=60, le=3600)
+    host_root_path: Path = Path("/host/rootfs-marker")
+    host_network_stats_path: Path = Path("/host/network-dev")
+    host_cpu_stats_path: Path = Path("/host/proc-stat")
+    host_memory_stats_path: Path = Path("/host/meminfo")
+    host_load_stats_path: Path = Path("/host/loadavg")
+    host_uptime_stats_path: Path = Path("/host/uptime")
     gpu_monitoring_enabled: bool = True
     nvidia_smi_path: Path = Path("/usr/bin/nvidia-smi")
     gpu_query_timeout_seconds: float = Field(default=5.0, ge=1, le=30)

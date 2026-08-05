@@ -15,7 +15,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir /wheels/* \
     && rm -rf /wheels \
-    && mkdir -p /data
+    && mkdir -p /data /host \
+    && touch /host/rootfs-marker /host/network-dev /host/proc-stat \
+      /host/meminfo /host/loadavg /host/uptime
 WORKDIR /app
 VOLUME ["/data"]
 COPY --chmod=0755 deploy/agent-entrypoint.sh /usr/local/bin/cloudhelm-agent-entrypoint

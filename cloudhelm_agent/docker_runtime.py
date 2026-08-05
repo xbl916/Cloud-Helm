@@ -10,9 +10,15 @@ from cloudhelm.image_reference import validate_tag_change
 
 
 class DockerRuntime:
-    def __init__(self, max_containers: int = 500):
+    def __init__(
+        self, max_containers: int = 500, disk_query_seconds: float = 300.0
+    ):
         self.client = docker.from_env()
         self.max_containers = max_containers
+        self.disk_query_seconds = disk_query_seconds
+        self._disk_sizes: dict[str, tuple[int, int]] = {}
+        self._disk_sizes_updated_at = float("-inf")
+        self._stats_previous: dict[str, tuple[float, int, int, int, int]] = {}
 
     def ping(self) -> None:
         self.client.ping()
@@ -28,18 +34,42 @@ class DockerRuntime:
     def inventory(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         containers = self.client.containers.list(all=True)[: self.max_containers]
+        disk_sizes = self._container_disk_sizes()
+        seen: set[str] = set()
         for container in containers:
+            seen.add(container.id)
             attrs = container.attrs
             labels = attrs.get("Config", {}).get("Labels") or {}
             state = attrs.get("State") or {}
             cpu_percent = memory_usage = memory_limit = memory_percent = 0
+            network_rx_bytes = network_tx_bytes = 0
+            network_rx_bps = network_tx_bps = 0.0
+            block_read_bytes = block_write_bytes = 0
+            block_read_bps = block_write_bps = 0.0
+            pids = 0
             if state.get("Running"):
                 try:
                     stats = container.stats(stream=False)
                     cpu_percent = self._cpu_percent(stats)
                     memory_usage, memory_limit, memory_percent = self._memory(stats)
+                    network_rx_bytes, network_tx_bytes = self._network(stats)
+                    block_read_bytes, block_write_bytes = self._block_io(stats)
+                    pids = max(0, int((stats.get("pids_stats") or {}).get("current") or 0))
+                    (
+                        network_rx_bps,
+                        network_tx_bps,
+                        block_read_bps,
+                        block_write_bps,
+                    ) = self._io_rates(
+                        container.id,
+                        network_rx_bytes,
+                        network_tx_bytes,
+                        block_read_bytes,
+                        block_write_bytes,
+                    )
                 except DockerException:
                     pass
+            writable_layer_bytes, rootfs_bytes = disk_sizes.get(container.id, (0, 0))
             image = str((attrs.get("Config") or {}).get("Image") or "")
             if not image and container.image.tags:
                 image = container.image.tags[0]
@@ -60,6 +90,24 @@ class DockerRuntime:
                     "memory_usage": memory_usage,
                     "memory_limit": memory_limit,
                     "memory_percent": round(memory_percent, 2),
+                    "network_rx_bytes": network_rx_bytes,
+                    "network_tx_bytes": network_tx_bytes,
+                    "network_rx_bps": round(network_rx_bps, 2),
+                    "network_tx_bps": round(network_tx_bps, 2),
+                    "writable_layer_bytes": writable_layer_bytes,
+                    "rootfs_bytes": rootfs_bytes,
+                    "block_read_bytes": block_read_bytes,
+                    "block_write_bytes": block_write_bytes,
+                    "block_read_bps": round(block_read_bps, 2),
+                    "block_write_bps": round(block_write_bps, 2),
+                    "pids": pids,
+                    "restart_count": max(0, int(attrs.get("RestartCount") or 0)),
+                    "oom_killed": bool(state.get("OOMKilled")),
+                    "exit_code": state.get("ExitCode"),
+                    "finished_at": state.get("FinishedAt"),
+                    "health_failing_streak": max(
+                        0, int((state.get("Health") or {}).get("FailingStreak") or 0)
+                    ),
                     "started_at": state.get("StartedAt"),
                     "ports": attrs.get("NetworkSettings", {}).get("Ports") or {},
                     "gpu_devices": gpu_devices,
@@ -71,7 +119,88 @@ class DockerRuntime:
                     },
                 }
             )
+        self._stats_previous = {
+            key: value for key, value in self._stats_previous.items() if key in seen
+        }
         return result
+
+    def _container_disk_sizes(self) -> dict[str, tuple[int, int]]:
+        now = time.monotonic()
+        if now - self._disk_sizes_updated_at < self.disk_query_seconds:
+            return self._disk_sizes
+        self._disk_sizes_updated_at = now
+        try:
+            usage = self.client.df()
+            containers = usage.get("Containers") or []
+            self._disk_sizes = {
+                str(item.get("Id")): (
+                    max(0, int(item.get("SizeRw") or 0)),
+                    max(0, int(item.get("SizeRootFs") or 0)),
+                )
+                for item in containers
+                if item.get("Id")
+            }
+        except (DockerException, TypeError, ValueError):
+            pass
+        return self._disk_sizes
+
+    @staticmethod
+    def _network(stats: dict[str, Any]) -> tuple[int, int]:
+        networks = stats.get("networks") or {}
+        received = sum(max(0, int(item.get("rx_bytes") or 0)) for item in networks.values())
+        transmitted = sum(max(0, int(item.get("tx_bytes") or 0)) for item in networks.values())
+        return received, transmitted
+
+    @staticmethod
+    def _block_io(stats: dict[str, Any]) -> tuple[int, int]:
+        entries = (stats.get("blkio_stats") or {}).get(
+            "io_service_bytes_recursive"
+        ) or []
+        read = write = 0
+        for item in entries:
+            operation = str(item.get("op") or "").lower()
+            value = max(0, int(item.get("value") or 0))
+            if operation == "read":
+                read += value
+            elif operation == "write":
+                write += value
+        return read, write
+
+    def _io_rates(
+        self,
+        docker_id: str,
+        received: int,
+        transmitted: int,
+        block_read: int,
+        block_write: int,
+    ) -> tuple[float, float, float, float]:
+        now = time.monotonic()
+        previous = self._stats_previous.get(docker_id)
+        self._stats_previous[docker_id] = (
+            now,
+            received,
+            transmitted,
+            block_read,
+            block_write,
+        )
+        if not previous:
+            return 0.0, 0.0, 0.0, 0.0
+        (
+            previous_time,
+            previous_received,
+            previous_transmitted,
+            previous_block_read,
+            previous_block_write,
+        ) = previous
+        elapsed = now - previous_time
+        if elapsed <= 0:
+            return 0.0, 0.0, 0.0, 0.0
+        return (
+            max(0, received - previous_received) / elapsed,
+            max(0, transmitted - previous_transmitted) / elapsed,
+            max(0, block_read - previous_block_read) / elapsed,
+            max(0, block_write - previous_block_write) / elapsed,
+        )
 
     @staticmethod
     def _gpu_allocation(attrs: dict[str, Any]) -> tuple[list[str], bool]:

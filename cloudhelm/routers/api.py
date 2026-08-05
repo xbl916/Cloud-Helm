@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import delete, select
@@ -17,6 +17,7 @@ from cloudhelm.models import (
     AccessRule,
     AuditLog,
     Container,
+    MetricSample,
     Node,
     Task,
     User,
@@ -58,6 +59,14 @@ def _node_gpus(node: Node) -> list[dict]:
         return value if isinstance(value, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _node_system_metrics(node: Node) -> dict:
+    try:
+        value = json.loads(node.system_metrics_json or "{}")
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def _container_gpu_devices(container: Container) -> list[str]:
@@ -123,6 +132,12 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
         for gpu in gpus
         if gpu.get("utilization_gpu") is not None
     ]
+    system_metrics = [
+        _node_system_metrics(node)
+        for node in nodes
+        if can_view_node_metrics(user, rules, node)
+        and node.system_metrics_status == "ok"
+    ]
     return {
         "nodes": {
             "total": len(nodes),
@@ -148,6 +163,23 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
                 int(gpu.get("memory_total_mib") or 0) for gpu in gpus
             ),
         },
+        "system": {
+            "disk_used_bytes": sum(
+                int(item.get("disk_used_bytes") or 0) for item in system_metrics
+            ),
+            "disk_total_bytes": sum(
+                int(item.get("disk_total_bytes") or 0) for item in system_metrics
+            ),
+            "network_rx_bps": round(
+                sum(float(item.get("network_rx_bps") or 0) for item in system_metrics),
+                2,
+            ),
+            "network_tx_bps": round(
+                sum(float(item.get("network_tx_bps") or 0) for item in system_metrics),
+                2,
+            ),
+            "node_count": len(system_metrics),
+        },
     }
 
 
@@ -163,7 +195,8 @@ def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
     result = []
     for node in nodes:
         node_containers = [item for item in containers if item.node_id == node.id]
-        metrics_visible = can_view_node_metrics(user, rules, node) or any(
+        host_metrics_visible = can_view_node_metrics(user, rules, node)
+        gpu_metrics_visible = host_metrics_visible or any(
             _container_has_gpu(item) for item in node_containers
         )
         gpus = _visible_node_gpus(user, rules, node, node_containers)
@@ -178,12 +211,26 @@ def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
                 "agent_version": node.agent_version,
                 "docker_version": node.docker_version,
                 "os": node.os,
-                "gpu_status": node.gpu_status if metrics_visible else "restricted",
-                "gpu_error": node.gpu_error if metrics_visible else None,
+                "gpu_status": node.gpu_status
+                if gpu_metrics_visible
+                else "restricted",
+                "gpu_error": node.gpu_error if gpu_metrics_visible else None,
                 "gpu_updated_at": _iso(node.gpu_updated_at)
-                if metrics_visible
+                if gpu_metrics_visible
                 else None,
                 "gpus": gpus,
+                "system_metrics_status": node.system_metrics_status
+                if host_metrics_visible
+                else "restricted",
+                "system_metrics_error": node.system_metrics_error
+                if host_metrics_visible
+                else None,
+                "system_metrics_updated_at": _iso(node.system_metrics_updated_at)
+                if host_metrics_visible
+                else None,
+                "system_metrics": _node_system_metrics(node)
+                if host_metrics_visible
+                else {},
                 "container_count": counts.get(node.id, 0),
                 "running_count": running.get(node.id, 0),
             }
@@ -244,12 +291,96 @@ def _container_dict(item: Container) -> dict:
         "memory_usage": item.memory_usage,
         "memory_limit": item.memory_limit,
         "memory_percent": round(item.memory_percent, 2),
+        "network_rx_bytes": item.network_rx_bytes,
+        "network_tx_bytes": item.network_tx_bytes,
+        "network_rx_bps": round(item.network_rx_bps, 2),
+        "network_tx_bps": round(item.network_tx_bps, 2),
+        "writable_layer_bytes": item.writable_layer_bytes,
+        "rootfs_bytes": item.rootfs_bytes,
+        "block_read_bytes": item.block_read_bytes,
+        "block_write_bytes": item.block_write_bytes,
+        "block_read_bps": round(item.block_read_bps, 2),
+        "block_write_bps": round(item.block_write_bps, 2),
+        "pids": item.pids,
+        "restart_count": item.restart_count,
+        "oom_killed": item.oom_killed,
+        "exit_code": item.exit_code,
+        "finished_at": item.finished_at,
+        "health_failing_streak": item.health_failing_streak,
         "started_at": item.started_at,
         "ports": json.loads(item.ports_json or "{}"),
         "gpu_devices": _container_gpu_devices(item),
         "gpu_all": item.gpu_all,
         "updated_at": _iso(item.updated_at),
     }
+
+
+def _history(
+    db: Db, target_type: str, target_id: str, hours: int, limit: int
+) -> list[dict]:
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    samples = list(
+        db.scalars(
+            select(MetricSample)
+            .where(
+                MetricSample.target_type == target_type,
+                MetricSample.target_id == target_id,
+                MetricSample.sampled_at >= since,
+            )
+            .order_by(MetricSample.sampled_at.desc())
+            .limit(limit)
+        ).all()
+    )
+    return [
+        {
+            "sampled_at": _iso(item.sampled_at),
+            "cpu_percent": round(item.cpu_percent, 2),
+            "memory_usage": item.memory_usage,
+            "memory_percent": round(item.memory_percent, 2),
+            "network_rx_bps": round(item.network_rx_bps, 2),
+            "network_tx_bps": round(item.network_tx_bps, 2),
+            "disk_used_bytes": item.disk_used_bytes,
+            "disk_total_bytes": item.disk_total_bytes,
+            "block_read_bps": round(item.block_read_bps, 2),
+            "block_write_bps": round(item.block_write_bps, 2),
+            "pids": item.pids,
+            "restart_count": item.restart_count,
+        }
+        for item in reversed(samples)
+    ]
+
+
+@router.get("/nodes/{node_id}/metrics/history")
+def node_metric_history(
+    node_id: str,
+    db: Db,
+    user: CurrentUser,
+    hours: int = Query(default=24, ge=1, le=8760),
+    limit: int = Query(default=1000, ge=2, le=2500),
+) -> list[dict]:
+    node = db.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    rules = load_access_rules(db, user)
+    if not can_view_node_metrics(user, rules, node):
+        raise HTTPException(status_code=404, detail="节点不存在")
+    return _history(db, "node", node.id, hours, limit)
+
+
+@router.get("/containers/{container_id}/metrics/history")
+def container_metric_history(
+    container_id: str,
+    db: Db,
+    user: CurrentUser,
+    hours: int = Query(default=24, ge=1, le=8760),
+    limit: int = Query(default=1000, ge=2, le=2500),
+) -> list[dict]:
+    item = db.get(Container, container_id)
+    node = db.get(Node, item.node_id) if item else None
+    rules = load_access_rules(db, user)
+    if not item or not node or not can_access(user, rules, node, item, "view"):
+        raise HTTPException(status_code=404, detail="容器不存在")
+    return _history(db, "container", item.id, hours, limit)
 
 
 @router.post(

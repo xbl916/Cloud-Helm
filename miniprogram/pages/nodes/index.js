@@ -8,7 +8,16 @@ Page({
   async load() {
     this.setData({loading: true, error: ""})
     try {
-      const nodes = (await api.get("/nodes")).map(item => ({...item, lastSeen: format.time(item.last_seen_at)}))
+      const nodes = (await api.get("/nodes")).map(item => {
+        const system = item.system_metrics || {}
+        const diskPercent = system.disk_total_bytes ? system.disk_used_bytes / system.disk_total_bytes * 100 : null
+        return {
+          ...item,
+          lastSeen: format.time(item.last_seen_at),
+          network: item.system_metrics_status === "ok" ? `↓ ${format.rate(system.network_rx_bps)} · ↑ ${format.rate(system.network_tx_bps)}` : "网络 —",
+          disk: diskPercent === null ? "磁盘 —" : `磁盘 ${diskPercent.toFixed(1)}%`
+        }
+      })
       this.allNodes = nodes
       this.applyFilter()
     } catch (error) { this.setData({error: error.message}) }

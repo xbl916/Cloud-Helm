@@ -1,6 +1,8 @@
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
-from cloudhelm.db import Base
+from cloudhelm.db import Base, initialize_database
+from cloudhelm.models import Container, Node
 
 
 def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
@@ -10,10 +12,108 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
     user_columns = {item["name"] for item in inspector.get_columns("users")}
     assert "wecom_userid" in user_columns
     assert "password_hash" not in user_columns
-    assert {"web_sessions", "oauth_states"}.issubset(inspector.get_table_names())
-    node_columns = {item["name"] for item in inspector.get_columns("nodes")}
-    assert {"gpus_json", "gpu_status", "gpu_error", "gpu_updated_at"}.issubset(
-        node_columns
+    assert {"web_sessions", "oauth_states", "metric_samples"}.issubset(
+        inspector.get_table_names()
     )
+    node_columns = {item["name"] for item in inspector.get_columns("nodes")}
+    assert {
+        "gpus_json",
+        "gpu_status",
+        "gpu_error",
+        "gpu_updated_at",
+        "system_metrics_json",
+        "system_metrics_status",
+        "system_metrics_error",
+        "system_metrics_updated_at",
+        "metrics_history_at",
+    }.issubset(node_columns)
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
-    assert {"gpu_devices_json", "gpu_all"}.issubset(container_columns)
+    assert {
+        "gpu_devices_json",
+        "gpu_all",
+        "network_rx_bytes",
+        "network_tx_bytes",
+        "network_rx_bps",
+        "network_tx_bps",
+        "writable_layer_bytes",
+        "rootfs_bytes",
+        "block_read_bytes",
+        "block_write_bytes",
+        "block_read_bps",
+        "block_write_bps",
+        "pids",
+        "restart_count",
+        "oom_killed",
+        "exit_code",
+        "finished_at",
+        "health_failing_streak",
+    }.issubset(container_columns)
+
+
+def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
+    database = tmp_path / "cloudhelm-0.5.2.db"
+    old_engine = create_engine(f"sqlite:///{database}")
+    Base.metadata.create_all(old_engine)
+    with Session(old_engine) as session:
+        node = Node(
+            agent_key="legacy-agent",
+            name="原节点",
+            agent_token_hash="legacy-token-hash",
+        )
+        session.add(node)
+        session.flush()
+        session.add(
+            Container(
+                node_id=node.id,
+                docker_id="legacy-container-id",
+                name="原容器",
+            )
+        )
+        session.commit()
+
+    monitoring_columns = {
+        "nodes": [
+            "system_metrics_json",
+            "system_metrics_status",
+            "system_metrics_error",
+            "system_metrics_updated_at",
+            "metrics_history_at",
+        ],
+        "containers": [
+            "network_rx_bytes",
+            "network_tx_bytes",
+            "network_rx_bps",
+            "network_tx_bps",
+            "writable_layer_bytes",
+            "rootfs_bytes",
+            "block_read_bytes",
+            "block_write_bytes",
+            "block_read_bps",
+            "block_write_bps",
+            "pids",
+            "restart_count",
+            "oom_killed",
+            "exit_code",
+            "finished_at",
+            "health_failing_streak",
+        ],
+    }
+    with old_engine.begin() as connection:
+        for table, columns in monitoring_columns.items():
+            for column in columns:
+                connection.execute(text(f'ALTER TABLE "{table}" DROP COLUMN "{column}"'))
+
+    initialize_database(old_engine)
+    initialize_database(old_engine)
+
+    inspector = inspect(old_engine)
+    node_columns = {item["name"] for item in inspector.get_columns("nodes")}
+    container_columns = {item["name"] for item in inspector.get_columns("containers")}
+    assert set(monitoring_columns["nodes"]).issubset(node_columns)
+    assert set(monitoring_columns["containers"]).issubset(container_columns)
+    with old_engine.connect() as connection:
+        assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
+        assert (
+            connection.execute(text("SELECT name FROM containers")).scalar_one()
+            == "原容器"
+        )

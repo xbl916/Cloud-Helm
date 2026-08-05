@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.5.2`，按全新部署设计，不包含旧版账号密码登录或旧数据库升级逻辑。
+当前版本为 `0.6.0`。支持从 `0.5.2` SQLite 原地升级，新增字段由 Server 启动时自动、幂等迁移，不会重建已有表或清空用户、权限、节点、容器及审计数据。
 
 快速导航：
 
@@ -93,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.5.2.tar.gz.sha256
-tar -xzf cloudhelm-0.5.2.tar.gz
-cd cloudhelm-0.5.2
+sha256sum -c cloudhelm-0.6.0.tar.gz.sha256
+tar -xzf cloudhelm-0.6.0.tar.gz
+cd cloudhelm-0.6.0
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.5.2.tar.gz: OK
+cloudhelm-0.6.0.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -172,6 +172,10 @@ CLOUDHELM_MAX_SESSIONS_PER_USER=5
 CLOUDHELM_OAUTH_STATE_SECONDS=300
 CLOUDHELM_NODE_OFFLINE_SECONDS=60
 CLOUDHELM_MAX_TASK_RESULT_BYTES=262144
+CLOUDHELM_METRICS_HISTORY_ENABLED=true
+CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS=300
+CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS=168
+CLOUDHELM_METRICS_HISTORY_MAX_ROWS=200000
 CLOUDHELM_TRUST_PROXY_HEADERS=true
 CLOUDHELM_BIND_ADDRESS=127.0.0.1
 CLOUDHELM_PORT=8080
@@ -200,6 +204,10 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_OAUTH_STATE_SECONDS`|企微 OAuth 临时 state 的有效秒数|默认 300，可设 60–600|
 |`CLOUDHELM_NODE_OFFLINE_SECONDS`|多久未收到 Agent 上报后判定节点离线|默认 60，可设 15–3600；应大于 Agent 上报间隔|
 |`CLOUDHELM_MAX_TASK_RESULT_BYTES`|每次容器任务结果允许保存的最大字节数|默认 262144，可设 4096–2097152|
+|`CLOUDHELM_METRICS_HISTORY_ENABLED`|是否保存节点和容器趋势历史|默认 `true`；关闭后仍保留当前值监控|
+|`CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS`|历史采样间隔|默认 300 秒，可设 60–3600；心跳仍按 Agent 上报间隔更新当前值|
+|`CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS`|历史保留时间|默认 168 小时（7 天），可设 1–8760；PostgreSQL 可按容量提高到半年或一年|
+|`CLOUDHELM_METRICS_HISTORY_MAX_ROWS`|所有节点和容器合计的历史行数硬上限|默认 200000，可设 1000–20000000；达到后优先保留最新数据|
 |`CLOUDHELM_TRUST_PROXY_HEADERS`|读取代理转发的真实 IP|仅在后端只允许可信代理访问时设为 `true`|
 |`CLOUDHELM_BIND_ADDRESS`|宿主机监听地址|保持 `127.0.0.1`|
 |`CLOUDHELM_PORT`|宿主机后端端口|默认 8080，不对公网开放|
@@ -322,7 +330,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.5.2/deploy
+cd cloudhelm-0.6.0/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -342,6 +350,13 @@ CLOUDHELM_AGENT_REPORT_SECONDS=15
 CLOUDHELM_AGENT_POLL_SECONDS=3
 CLOUDHELM_AGENT_REQUEST_TIMEOUT_SECONDS=20
 CLOUDHELM_AGENT_MAX_CONTAINERS=500
+CLOUDHELM_AGENT_DISK_QUERY_SECONDS=300
+CLOUDHELM_AGENT_HOST_ROOT_PATH=/host/rootfs-marker
+CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH=/host/network-dev
+CLOUDHELM_AGENT_HOST_CPU_STATS_PATH=/host/proc-stat
+CLOUDHELM_AGENT_HOST_MEMORY_STATS_PATH=/host/meminfo
+CLOUDHELM_AGENT_HOST_LOAD_STATS_PATH=/host/loadavg
+CLOUDHELM_AGENT_HOST_UPTIME_STATS_PATH=/host/uptime
 CLOUDHELM_AGENT_GPU_MONITORING_ENABLED=true
 CLOUDHELM_AGENT_NVIDIA_SMI_PATH=/usr/bin/nvidia-smi
 CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS=5
@@ -363,6 +378,13 @@ CLOUDHELM_AGENT_GPU_MAX_OUTPUT_BYTES=4194304
 |`CLOUDHELM_AGENT_POLL_SECONDS`|任务轮询间隔|默认 3 秒，可设 1–60|
 |`CLOUDHELM_AGENT_REQUEST_TIMEOUT_SECONDS`|访问 Server API 的单次超时|默认 20 秒，可设 3–120|
 |`CLOUDHELM_AGENT_MAX_CONTAINERS`|单节点一次最多采集的容器数量|默认 500，可设 1–2000|
+|`CLOUDHELM_AGENT_DISK_QUERY_SECONDS`|查询容器可写层磁盘大小的间隔|默认 300 秒，可设 60–3600；容器很多时可提高到 600 秒|
+|`CLOUDHELM_AGENT_HOST_ROOT_PATH`|根文件系统容量探针在 Agent 内的路径|保持 `/host/rootfs-marker`，与 Compose 的只读单文件挂载一致|
+|`CLOUDHELM_AGENT_HOST_NETWORK_STATS_PATH`|宿主机网络计数文件在 Agent 内的路径|保持 `/host/network-dev`|
+|`CLOUDHELM_AGENT_HOST_CPU_STATS_PATH`|宿主机 CPU 计数文件在 Agent 内的路径|保持 `/host/proc-stat`|
+|`CLOUDHELM_AGENT_HOST_MEMORY_STATS_PATH`|宿主机内存信息文件在 Agent 内的路径|保持 `/host/meminfo`|
+|`CLOUDHELM_AGENT_HOST_LOAD_STATS_PATH`|宿主机负载文件在 Agent 内的路径|保持 `/host/loadavg`|
+|`CLOUDHELM_AGENT_HOST_UPTIME_STATS_PATH`|宿主机运行时间文件在 Agent 内的路径|保持 `/host/uptime`|
 |`CLOUDHELM_AGENT_GPU_MONITORING_ENABLED`|是否探测 NVIDIA GPU|默认 `true`；非 GPU 节点可设为 `false`|
 |`CLOUDHELM_AGENT_NVIDIA_SMI_PATH`|Agent 容器内 `nvidia-smi` 的固定路径|默认 `/usr/bin/nvidia-smi`|
 |`CLOUDHELM_AGENT_GPU_QUERY_TIMEOUT_SECONDS`|单次 GPU 查询超时|默认 5 秒，可设 1–30|
@@ -380,6 +402,26 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 ```
 
 首次成功日志应包含节点已注册以及容器数量已上报。回到云舵页面，节点应在一个上报周期内显示为在线。
+
+新版 `agent.compose.yml` 只读挂载宿主机 `/etc/hostname` 作为根文件系统容量探针，并分别只读挂载 `/proc/net/dev`、`/proc/stat`、`/proc/meminfo`、`/proc/loadavg`、`/proc/uptime` 读取主机指标；不会把整个宿主机根目录或完整 `/proc` 暴露给 Agent。Agent 本身继续使用只读根文件系统并清空 capabilities。若只升级镜像而没有更新 Compose，容器监控仍可上报，但页面会明确提示主机监控挂载不可用。
+
+网络速率由相邻两次计数计算，Agent 启动后的第一次上报为 `0 B/s`，下一个上报周期开始显示实时速率。主机聚合会排除 `lo`、Docker bridge、veth、CNI 等常见容器虚拟接口，避免重复计数。
+
+页面同时显示主机 CPU、内存与 Swap、1/5/15 分钟负载、运行时间、根磁盘与 inode，以及容器 CPU、内存、网络、块 I/O、PID、重启次数、OOM、退出码和健康检查连续失败次数。容器磁盘数据来自 Docker `system df`：分别显示“可写层”和“镜像 + 可写层”，默认每 300 秒刷新。Docker volume、bind mount 和 tmpfs 属于容器外部存储，不计入容器可写层；它们所在文件系统的容量应通过节点磁盘或独立存储监控检查。
+
+Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样，H5 显示最近 24 小时曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON，并同时执行两个容量边界：删除 7 天前的数据，且全库最多保留最新 200000 行。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过硬上限，实际可查看时长会自动缩短。
+
+PostgreSQL 可以通过 Server 的 `.env` 提高保留量。例如 1 个节点、50 个容器按 5 分钟采样保留约半年，需要约 264 万行，可预留为：
+
+```dotenv
+CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS=300
+CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS=4320
+CLOUDHELM_METRICS_HISTORY_MAX_ROWS=3500000
+```
+
+配置允许最长 8760 小时（365 天）、最多 20000000 行，但实际值应根据节点和容器数量、数据库磁盘容量、备份窗口及查询性能确定。更改后重新创建 Server 生效，不需要修改表结构。
+
+SQLite 文件的实际字节数受页大小和索引影响，不能仅由行数精确换算。历史删除后空闲页会被后续采样复用，因此数据库不会因已过期数据持续无界增长，但文件不会立刻缩小。Server 不在心跳路径自动执行 `VACUUM`，以免长时间独占数据库；确需缩小文件时，应先备份并在维护窗口停止 Server 后手工执行。容器日志仍受每容器约 150 MB 的 Docker 日志轮转限制，它和 SQLite 历史容量是两套独立边界。
 
 Agent 主容器入口会把状态目录设置为 root 所有、权限 `0700`，随后立即清空全部 Linux capabilities，再启动 Agent。Compose 不再创建一次性初始化服务。由旧版本升级时，首次启动加入 `--remove-orphans` 即可删除旧 `data-init` 容器，节点凭据文件不会被删除。
 
@@ -407,7 +449,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-s
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.5.2 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+0.6.0 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -499,7 +541,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。节点指标是上报时刻的快照，当前版本不保存历史曲线，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.0 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
@@ -657,9 +699,50 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
+## 从 0.5.2 SQLite 原地升级
+
+升级会给 `nodes` 和 `containers` 表补充监控列，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、资源授权、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并且可安全重复执行。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
+
+先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
+
+```bash
+cd /实际路径/cloudhelm-0.5.2
+docker compose stop server
+sudo tar -czf ../cloudhelm-0.5.2-before-monitoring.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-0.5.2-before-monitoring.tar.gz
+test -s ../cloudhelm-0.5.2-before-monitoring.tar.gz
+```
+
+解压新版发布包后，把其中的 `docker-compose.yml` 复制到现有部署目录。保留现有 `.env` 和 `cloudhelm-data`，不要用示例文件覆盖它们：
+
+```bash
+cp /新版发布包目录/docker-compose.yml ./docker-compose.yml
+docker compose pull server
+docker compose up -d --no-build --remove-orphans server
+docker compose logs --tail=100 server
+curl --fail https://ops.company.com/healthz
+```
+
+日志中会逐项记录首次补充的监控列。再次重启不会重复迁移。随后确认企微登录、用户列表和既有容器授权仍然正常。
+
+每台 Agent 节点也必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
+
+```bash
+cd /实际路径/cloudhelm-0.5.2/deploy
+cp /新版发布包目录/deploy/agent.compose.yml ./agent.compose.yml
+cp /新版发布包目录/deploy/agent.gpu.compose.yml ./agent.gpu.compose.yml
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml pull agent
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build --remove-orphans agent
+docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
+```
+
+非 GPU 节点删除上面命令中的 `-f agent.gpu.compose.yml`。第一次心跳显示 `0 B/s` 属正常现象；约一个上报周期后才有网络速率，容器磁盘大小最长等待默认 300 秒。
+
+如新版 Server 无法启动，先保留错误日志，再把 Compose 中 Server 镜像恢复为 `0.5.2` 并启动。新增列是向后兼容字段，`0.5.2` 会忽略它们；需要完全恢复升级前状态时，停止 Server、清空当前 `cloudhelm-data` 后再从备份包恢复。清空或覆盖数据库属于破坏性操作，必须先验证备份文件且只针对明确的部署目录。
+
 ## PostgreSQL 部署
 
-如果预计长期运行、多管理员频繁操作或希望使用现有数据库备份体系，可以在首次启动前选择 PostgreSQL。当前版本按全新安装设计，请在第一次启动前确定使用 SQLite 还是 PostgreSQL，不提供两者之间的在线迁移命令。
+如果预计长期运行、多管理员频繁操作或希望使用现有数据库备份体系，可以在首次启动前选择 PostgreSQL。SQLite 与 PostgreSQL 之间仍不提供在线转换命令；已经使用 SQLite 的部署不要只修改连接地址来切换数据库。
 
 配置 PostgreSQL 密码：
 
@@ -751,7 +834,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.5.2
+bash scripts/package-release.sh 0.6.0
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -759,11 +842,11 @@ bash scripts/package-release.sh 0.5.2
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.5.2
-git push origin v0.5.2
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.5.2`
-- `ghcr.io/xbl916/cloud-helm-agent:0.5.2`
+- `ghcr.io/xbl916/cloud-helm-server:0.6.0`
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.0`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.5.2` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

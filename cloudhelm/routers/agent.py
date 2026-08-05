@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import AgentNode, Config, Db
+from cloudhelm.metrics import record_metric_history
 from cloudhelm.models import Container, Node, Task, TaskStatus
 from cloudhelm.schemas import (
     AgentTask,
@@ -61,7 +62,9 @@ def enroll(payload: EnrollRequest, db: Db, settings: Config) -> EnrollResponse:
 
 
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
-def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
+def heartbeat(
+    payload: HeartbeatRequest, node: AgentNode, db: Db, settings: Config
+) -> Response:
     now = datetime.now(UTC)
     node.hostname = payload.hostname
     node.agent_version = payload.agent_version
@@ -75,6 +78,14 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
         separators=(",", ":"),
     )
     node.gpu_updated_at = now
+    node.system_metrics_status = payload.system_metrics_status
+    node.system_metrics_error = payload.system_metrics_error
+    node.system_metrics_json = json.dumps(
+        payload.system_metrics.model_dump(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    node.system_metrics_updated_at = now
     node.last_seen_at = now
 
     db.execute(
@@ -86,6 +97,7 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
             select(Container).where(Container.node_id == node.id)
         ).all()
     }
+    reported_containers: list[Container] = []
     for snapshot in payload.containers:
         item = existing.get(snapshot.docker_id)
         if not item:
@@ -103,6 +115,22 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
         item.memory_usage = snapshot.memory_usage
         item.memory_limit = snapshot.memory_limit
         item.memory_percent = snapshot.memory_percent
+        item.network_rx_bytes = snapshot.network_rx_bytes
+        item.network_tx_bytes = snapshot.network_tx_bytes
+        item.network_rx_bps = snapshot.network_rx_bps
+        item.network_tx_bps = snapshot.network_tx_bps
+        item.writable_layer_bytes = snapshot.writable_layer_bytes
+        item.rootfs_bytes = snapshot.rootfs_bytes
+        item.block_read_bytes = snapshot.block_read_bytes
+        item.block_write_bytes = snapshot.block_write_bytes
+        item.block_read_bps = snapshot.block_read_bps
+        item.block_write_bps = snapshot.block_write_bps
+        item.pids = snapshot.pids
+        item.restart_count = snapshot.restart_count
+        item.oom_killed = snapshot.oom_killed
+        item.exit_code = snapshot.exit_code
+        item.finished_at = snapshot.finished_at
+        item.health_failing_streak = snapshot.health_failing_streak
         item.started_at = snapshot.started_at
         item.ports_json = json.dumps(
             snapshot.ports, ensure_ascii=False, separators=(",", ":")
@@ -116,6 +144,9 @@ def heartbeat(payload: HeartbeatRequest, node: AgentNode, db: Db) -> Response:
         item.gpu_all = snapshot.gpu_all
         item.present = True
         item.updated_at = now
+        reported_containers.append(item)
+    db.flush()
+    record_metric_history(db, node, reported_containers, payload, now, settings)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

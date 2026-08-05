@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     static_dir: Path = Path(__file__).parent / "static"
     max_task_result_bytes: int = Field(default=262144, ge=4096, le=2097152)
     node_offline_seconds: int = Field(default=60, ge=15, le=3600)
+    metrics_history_enabled: bool = True
+    metrics_history_interval_seconds: int = Field(default=300, ge=60, le=3600)
+    metrics_history_retention_hours: int = Field(default=168, ge=1, le=8760)
+    metrics_history_max_rows: int = Field(default=200000, ge=1000, le=20000000)
 
     @field_validator(
         "agent_enrollment_token", "wecom_secret", "wecom_miniprogram_secret"
