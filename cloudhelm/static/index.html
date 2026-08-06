@@ -7,8 +7,8 @@
     <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/app.css?v=0.6.1" />
-    <link rel="stylesheet" href="/assets/gpu.css?v=0.6.1" />
+    <link rel="stylesheet" href="/assets/app.css?v=0.6.3" />
+    <link rel="stylesheet" href="/assets/gpu.css?v=0.6.3" />
     <title>云舵 Cloud Helm</title>
   </head>
   <body>
@@ -81,7 +81,7 @@
           <div class="settings-card">
             <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
             <div><span>节点通信</span><strong>独立令牌</strong></div>
-            <div><span>版本</span><strong>Cloud Helm 0.6.1</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.6.3</strong></div>
           </div>
           <section id="admin-users" class="admin-users hidden">
             <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
@@ -122,7 +122,7 @@
 
     <div id="image-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true">
       <form id="image-form" class="user-form image-form">
-        <div class="form-heading"><div><p class="eyebrow">ADMIN ONLY</p><h2>替换镜像 Tag</h2></div><button type="button" data-close-image>×</button></div>
+        <div class="form-heading"><div><p class="eyebrow">RESOURCE ADMIN</p><h2>替换镜像 Tag</h2></div><button type="button" data-close-image>×</button></div>
         <p class="image-warning">只会替换当前容器，镜像仓库不可更改。Compose 编排文件不会同步修改，后续重新部署时请同步更新其中的 Tag。</p>
         <label>镜像仓库<input id="image-repository" readonly /></label>
         <label>当前 Tag<input id="image-current-tag" readonly /></label>
@@ -157,6 +157,6 @@
         <footer><button type="button" data-close-access>取消</button><button id="save-access-button" class="primary-small">保存权限</button></footer>
       </section>
     </div>
-    <script src="/assets/app.js?v=0.6.1" defer></script>
+    <script src="/assets/app.js?v=0.6.3" defer></script>
   </body>
 </html>

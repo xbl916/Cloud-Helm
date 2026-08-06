@@ -12,6 +12,7 @@ class UserOut(BaseModel):
     wecom_userid: str
     display_name: str
     role: UserRole
+    can_manage_access: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -75,6 +76,7 @@ class AccessRuleInput(BaseModel):
     can_view: bool = True
     can_logs: bool = False
     can_operate: bool = False
+    can_manage: bool = False
 
 
 class AccessConfigInput(BaseModel):

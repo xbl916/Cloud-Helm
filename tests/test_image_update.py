@@ -142,7 +142,7 @@ def test_agent_rolls_back_old_container_if_replacement_creation_fails(monkeypatc
     old.start.assert_called_once_with()
 
 
-def test_only_admin_can_queue_same_repository_image_update(
+def test_global_or_container_admin_can_queue_same_repository_image_update(
     client: TestClient, admin_headers: dict[str, str], session_for
 ):
     enroll = client.post(
@@ -237,9 +237,32 @@ def test_only_admin_can_queue_same_repository_image_update(
     assert forbidden.status_code == 403
 
     admin_headers = session_for("admin-wecom-id")
+    promoted = client.put(
+        f"/api/v1/users/{created_operator['id']}/access",
+        headers=admin_headers,
+        json={
+            "restricted": True,
+            "rules": [
+                {
+                    "scope_type": "container",
+                    "node_id": credentials["node_id"],
+                    "container_id": container["id"],
+                    "can_manage": True,
+                }
+            ],
+        },
+    )
+    assert promoted.status_code == 200
+    operator_headers = session_for("image.operator")
+    manager_detail = client.get(
+        f"/api/v1/containers/{container['id']}", headers=operator_headers
+    ).json()
+    assert manager_detail["permissions"]["manage"] is True
+    assert manager_detail["permissions"]["update_image"] is True
+
     queued = client.post(
         f"/api/v1/containers/{container['id']}/actions",
-        headers=admin_headers,
+        headers=operator_headers,
         json={"action": "update_image", "target_image": "nginx:1.26"},
     )
     assert queued.status_code == 202

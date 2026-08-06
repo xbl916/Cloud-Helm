@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import delete, select, update
 
+from cloudhelm.access import can_manage_resources
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import (
     CSRF_COOKIE,
@@ -31,6 +32,17 @@ _token_cache: dict[tuple[str, str], tuple[str, float]] = {}
 _token_cache_lock = threading.Lock()
 _start_attempts: dict[str, deque[float]] = defaultdict(deque)
 _start_attempts_lock = threading.Lock()
+
+
+def _user_out(db: Db, user: User) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "wecom_userid": user.wecom_userid,
+        "display_name": user.display_name,
+        "role": user.role,
+        "can_manage_access": can_manage_resources(db, user),
+    }
 
 
 def _rate_limit_oauth_start(peer: str) -> None:
@@ -389,7 +401,7 @@ async def wecom_miniprogram_login(
         "access_token": raw_session,
         "token_type": "Bearer",
         "expires_in": expires_in,
-        "user": user,
+        "user": _user_out(db, user),
     }
 
 
@@ -418,5 +430,5 @@ def logout(
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: CurrentUser) -> User:
-    return user
+def me(db: Db, user: CurrentUser) -> dict:
+    return _user_out(db, user)

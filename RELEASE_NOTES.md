@@ -1,4 +1,18 @@
-# Cloud Helm 0.6.1
+# Cloud Helm 0.6.3
+
+## 设备与容器级资源管理员
+
+- 保留首次引导和后续创建的全局管理员，同时允许给运维成员按环境、节点、Compose 项目或单个容器授予“资源管理员”。
+- 节点管理员自动管理该节点下的项目和容器；项目管理员只管理对应项目；容器管理员只管理指定容器。
+- 资源管理员可以查看日志、启停/重启、执行同仓库镜像 Tag 更新，并给已有成员配置不超过自身范围的授权。
+- 资源管理员不能创建、停用、下线或修改账号，不能修改自己或全局管理员，不能授予全部资源，也不能通过直接调用 API 向上扩权。
+- 服务端采用局部替换策略，资源管理员修改授权时会保留目标成员在其他设备上的既有规则。
+- H5 和企业自用小程序均新增资源管理员级别、可编辑范围提示以及对应入口。
+
+## 兼容升级
+
+- Server 启动时自动、幂等地给既有 `access_rules` 表增加默认关闭的 `can_manage` 字段。
+- 现有用户、授权、节点、容器、Agent 凭据和审计数据保持不变，不需要修改 `.env`，也不要求升级 Agent 才能使用权限细分。
 
 ## 主机物理网卡监控
 
@@ -43,9 +57,9 @@
 
 ## 发布产物
 
-- `cloudhelm-0.6.1.tar.gz`：架构无关源码、部署文件与小程序代码。
-- `cloudhelm-0.6.1.tar.gz.sha256`：源码包完整性校验。
-- `ghcr.io/xbl916/cloud-helm-server:0.6.1`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.6.1`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
+- `cloudhelm-0.6.3.tar.gz`：架构无关源码、部署文件与小程序代码。
+- `cloudhelm-0.6.3.tar.gz.sha256`：源码包完整性校验。
+- `ghcr.io/xbl916/cloud-helm-server:0.6.3`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.3`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`；GPU overlay 仅要求 amd64/arm64。
 
 发布产物不包含 `.env`、企微 Secret、小程序 Secret、数据库、Agent 注册令牌或节点身份文件。

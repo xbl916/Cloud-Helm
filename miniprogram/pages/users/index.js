@@ -8,14 +8,15 @@ const roles = [
 const roleNames = {admin: "管理员", operator: "运维", viewer: "只读"}
 
 Page({
-  data: {loading: true, saving: false, error: "", users: [], roles, roleIndex: 0, form: {wecom_userid: "", display_name: ""}},
+  data: {loading: true, saving: false, error: "", users: [], roles, roleIndex: 0, canCreateUsers: false, form: {wecom_userid: "", display_name: ""}},
   onShow() { this.load() },
   onPullDownRefresh() { this.load().finally(() => wx.stopPullDownRefresh()) },
   async load() {
     this.setData({loading: true, error: ""})
     try {
-      const users = (await api.get("/users")).map(item => ({...item, roleName: roleNames[item.role] || item.role}))
-      this.setData({users})
+      const [current, usersResponse] = await Promise.all([api.get("/auth/me"), api.get("/users")])
+      const users = usersResponse.map(item => ({...item, roleName: roleNames[item.role] || item.role}))
+      this.setData({users, canCreateUsers: current.role === "admin"})
     } catch (error) { this.setData({error: error.message}) }
     finally { this.setData({loading: false}) }
   },

@@ -12,7 +12,7 @@ Page({
       getApp().globalData.user = user
       this.setData({
         user: {...user, avatar: user.display_name.slice(0, 1)},
-        roleName: roleNames[user.role] || user.role
+        roleName: `${roleNames[user.role] || user.role}${user.role !== "admin" && user.can_manage_access ? " · 资源管理员" : ""}`
       })
     } catch (error) { this.setData({error: error.message}) }
     finally { this.setData({loading: false}) }

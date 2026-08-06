@@ -83,3 +83,45 @@ def test_node_rule_grants_host_metrics():
         can_view=True,
     )
     assert can_view_node_metrics(viewer, [rule], node)
+
+
+def test_resource_manager_is_limited_to_managed_scope():
+    node, container = inventory()
+    manager = User(
+        id="manager-1",
+        username="manager",
+        wecom_userid="manager",
+        display_name="Resource Manager",
+        role=UserRole.operator,
+        resource_restricted=True,
+    )
+    rule = AccessRule(
+        user_id=manager.id,
+        scope_type="container",
+        node_id=node.id,
+        container_id=container.id,
+        can_manage=True,
+    )
+    assert can_access(manager, [rule], node, container, "manage")
+    assert can_access(manager, [rule], node, container, "operate")
+    other = Container(
+        id="container-2",
+        node_id=node.id,
+        docker_id="other-docker-id",
+        name="other",
+    )
+    assert not can_access(manager, [rule], node, other, "manage")
+
+
+def test_unrestricted_operator_does_not_implicitly_manage_resources():
+    node, container = inventory()
+    operator = User(
+        id="operator-global",
+        username="operator-global",
+        wecom_userid="operator-global",
+        display_name="Global Operator",
+        role=UserRole.operator,
+        resource_restricted=False,
+    )
+    assert can_access(operator, [], node, container, "operate")
+    assert not can_access(operator, [], node, container, "manage")

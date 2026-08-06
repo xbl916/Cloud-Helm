@@ -28,6 +28,10 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "metrics_history_at",
     }.issubset(node_columns)
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
+    access_rule_columns = {
+        item["name"] for item in inspector.get_columns("access_rules")
+    }
+    assert "can_manage" in access_rule_columns
     assert {
         "gpu_devices_json",
         "gpu_all",
@@ -102,6 +106,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
         for table, columns in monitoring_columns.items():
             for column in columns:
                 connection.execute(text(f'ALTER TABLE "{table}" DROP COLUMN "{column}"'))
+        connection.execute(text('ALTER TABLE "access_rules" DROP COLUMN "can_manage"'))
 
     initialize_database(old_engine)
     initialize_database(old_engine)
@@ -109,8 +114,12 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     inspector = inspect(old_engine)
     node_columns = {item["name"] for item in inspector.get_columns("nodes")}
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
+    access_rule_columns = {
+        item["name"] for item in inspector.get_columns("access_rules")
+    }
     assert set(monitoring_columns["nodes"]).issubset(node_columns)
     assert set(monitoring_columns["containers"]).issubset(container_columns)
+    assert "can_manage" in access_rule_columns
     with old_engine.connect() as connection:
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (

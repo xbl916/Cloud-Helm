@@ -286,6 +286,7 @@ class AccessRule(Base):
     can_view: Mapped[bool] = mapped_column(Boolean, default=True)
     can_logs: Mapped[bool] = mapped_column(Boolean, default=False)
     can_operate: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_manage: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )

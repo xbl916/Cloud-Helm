@@ -30,8 +30,8 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
-def _add_monitoring_columns(target_engine: Engine) -> None:
-    """Upgrade a 0.5.2 database without replacing any existing tables or rows."""
+def _add_compatible_columns(target_engine: Engine) -> None:
+    """Upgrade an existing database without replacing tables or rows."""
     timestamp_type = (
         "TIMESTAMP WITH TIME ZONE"
         if target_engine.dialect.name == "postgresql"
@@ -63,6 +63,9 @@ def _add_monitoring_columns(target_engine: Engine) -> None:
             "finished_at": "VARCHAR(60)",
             "health_failing_streak": "INTEGER NOT NULL DEFAULT 0",
         },
+        "access_rules": {
+            "can_manage": "BOOLEAN NOT NULL DEFAULT FALSE",
+        },
     }
     with target_engine.begin() as connection:
         inspector = inspect(connection)
@@ -77,11 +80,11 @@ def _add_monitoring_columns(target_engine: Engine) -> None:
                 connection.execute(
                     text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
                 )
-                logger.info("Added monitoring column %s.%s", table, column)
+                logger.info("Added compatible column %s.%s", table, column)
 
 
 def initialize_database(target_engine: Engine = engine) -> None:
     from cloudhelm import models  # noqa: F401
 
     Base.metadata.create_all(bind=target_engine)
-    _add_monitoring_columns(target_engine)
+    _add_compatible_columns(target_engine)

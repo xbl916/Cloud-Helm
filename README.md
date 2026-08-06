@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.6.1`。支持从 `0.5.2` SQLite 原地升级，新增字段由 Server 启动时自动、幂等迁移，不会重建已有表或清空用户、权限、节点、容器及审计数据。
+当前版本为 `0.6.3`。支持从 `0.5.2` SQLite 原地升级，新增字段由 Server 启动时自动、幂等迁移，不会重建已有表或清空用户、权限、节点、容器及审计数据。
 
 快速导航：
 
@@ -39,7 +39,7 @@ Docker Engine
 - 写操作必须同时通过同源 `Origin` 和 CSRF 校验。
 - 普通用户创建后默认没有任何容器权限；管理员明确授权后才可访问。
 - 每个 Agent 使用独立令牌，只接受日志、启动、停止、重启和同仓库换 Tag 五类任务。
-- 服务端不向 Agent 发送任意命令；镜像更新仅管理员可发起，Server 与 Agent 都会校验新旧仓库一致。系统不支持删除容器、任意指定仓库、任意修改挂载或执行 Shell。
+- 服务端不向 Agent 发送任意命令；镜像更新仅全局管理员或对应资源管理员可发起，Server 与 Agent 都会校验新旧仓库一致。系统不支持删除容器、任意指定仓库、任意修改挂载或执行 Shell。
 
 企微授权地址和成员身份接口依据[企业微信官方网页授权文档](https://developer.work.weixin.qq.com/document/path/91022)和[获取访问用户身份文档](https://developer.work.weixin.qq.com/document/path/91023)实现。
 
@@ -93,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.6.1.tar.gz.sha256
-tar -xzf cloudhelm-0.6.1.tar.gz
-cd cloudhelm-0.6.1
+sha256sum -c cloudhelm-0.6.3.tar.gz.sha256
+tar -xzf cloudhelm-0.6.3.tar.gz
+cd cloudhelm-0.6.3
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.6.1.tar.gz: OK
+cloudhelm-0.6.3.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -330,7 +330,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.6.1/deploy
+cd cloudhelm-0.6.3/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -455,7 +455,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-s
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.6.1 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+0.6.3 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -475,9 +475,9 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 
 不要删除或复制到其他节点使用 `cloudhelm-data` 目录；否则节点会丢失独立身份或复用错误身份。其余节点重复相同步骤，但应使用不同的 `CLOUDHELM_AGENT_NAME` 和正确的环境名称。
 
-### 10. 管理员更新容器镜像 Tag
+### 10. 全局或资源管理员更新容器镜像 Tag
 
-管理员可在 H5 或小程序的容器详情中选择“更换 Tag”。操作分为两步：先填写新 Tag，再核对容器名、原镜像和新镜像并二次确认。普通运维账号即使拥有该容器的启停权限，也不能更新镜像。
+全局管理员以及对应节点、项目或容器的资源管理员可在 H5 或小程序的容器详情中选择“更换 Tag”。操作分为两步：先填写新 Tag，再核对容器名、原镜像和新镜像并二次确认。只有普通运维权限、没有资源管理权的账号不能更新镜像。
 
 安全与执行约束如下：
 
@@ -502,7 +502,7 @@ docker compose -f agent.compose.yml logs --tail=50 agent
 - Agent 页面状态正常，日志中没有持续认证或 TLS 错误；
 - NVIDIA 节点的 Agent 容器内 `nvidia-smi` 正常，页面显示的型号、显存和数量与宿主机一致；
 - 执行一次测试容器日志读取，并确认审计页面有记录；
-- 使用测试容器执行一次同仓库换 Tag，并确认不同仓库、同 Tag 和运维角色均被拒绝；
+- 使用测试容器执行一次同仓库换 Tag，并确认不同仓库、同 Tag 和普通运维角色均被拒绝，同时确认该容器的资源管理员可以操作；
 - 已创建第二位管理员并完成首次数据库备份。
 
 ### 12. 常见部署故障
@@ -549,7 +549,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.1 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.3 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
@@ -557,17 +557,20 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 ## 人员与容器权限
 
-|角色|查看状态|查看日志|启停/重启|人员管理|
-|---|---:|---:|---:|---:|
-|管理员 `admin`|是|是|是|是|
-|运维 `operator`|按授权|按授权|按授权|否|
-|只读 `viewer`|按授权|按授权|否|否|
+|权限身份|查看状态|查看日志|启停/重启|同仓库换 Tag|配置资源授权|账号管理|
+|---|---:|---:|---:|---:|---:|---:|
+|全局管理员 `admin`|是|是|是|是|全部资源|是|
+|资源管理员 `operator + can_manage`|管理范围内|管理范围内|管理范围内|管理范围内|不超过自身范围|否|
+|普通运维 `operator`|按授权|按授权|按授权|否|否|否|
+|只读 `viewer`|按授权|按授权|否|否|否|否|
 
 添加用户时填写其准确的企业微信 `UserId`，并直接选择“全部资源”或“自定义资源范围”。自定义模式创建账号后会自动进入资源绑定页；未勾选任何规则时，该用户登录后看不到任何节点。
 
-管理员可以在创建流程或用户列表的“配置范围”中，按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”或“查看 + 日志 + 运维”。管理员角色始终拥有全部资源。服务端会对列表、容器详情、任务和审计接口重复执行授权校验，不能通过直接输入容器 ID 绕过。
+全局管理员可以在创建流程或用户列表的“配置范围”中，按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”“查看 + 日志 + 运维”或“资源管理员”。“资源管理员”只能授予运维角色；节点管理员自动管理该节点下的项目和容器，容器管理员只管理该容器。全局管理员角色始终拥有全部资源。
 
-管理员还可以：
+资源管理员可以给已经存在的普通成员配置授权，但服务端只允许其修改自身管理范围内的规则：不能创建、停用、下线或修改账号，不能修改自己或全局管理员，不能授予“全部资源”，也不能通过节点级规则扩大一个容器管理员的范围。目标成员在其他设备上的既有规则会原样保留。页面禁用和隐藏只用于提示，所有边界均由服务端再次校验，不能通过直接构造 API 或输入容器 ID 绕过。
+
+全局管理员还可以：
 
 - 点击“下线”立即撤销某人的全部云舵会话；
 - 点击“停用”阻止后续访问并撤销现有会话；
@@ -703,7 +706,7 @@ module.exports = {
 
 - 日常查看使用只读角色；
 - 只有确实需要启停服务的人使用运维角色；
-- 管理员账号数量保持少量；
+- 全局管理员账号数量保持少量，日常设备维护优先授予节点或容器级资源管理员；
 - 生产容器停止和重启前确认影响窗口；
 - 镜像更新仅使用不可变、已扫描并经过测试的 Tag；更新前核对原/新镜像，更新后同步编排文件；
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
@@ -711,7 +714,7 @@ module.exports = {
 
 ## 从 0.5.2 SQLite 原地升级
 
-升级会给 `nodes` 和 `containers` 表补充监控列，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、资源授权、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并且可安全重复执行。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
+升级会给 `nodes` 和 `containers` 表补充监控列、给既有 `access_rules` 表补充默认关闭的 `can_manage` 字段，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并且可安全重复执行。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -851,7 +854,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.6.1
+bash scripts/package-release.sh 0.6.3
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -859,11 +862,11 @@ bash scripts/package-release.sh 0.6.1
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.6.1
-git push origin v0.6.1
+git tag v0.6.3
+git push origin v0.6.3
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.6.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.6.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.6.3`
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.3`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.3` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

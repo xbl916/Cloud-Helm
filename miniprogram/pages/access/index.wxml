@@ -1,14 +1,14 @@
 <view class="page access-page">
-  <view class="hero"><view class="eyebrow">RESOURCE ACCESS</view><view class="title">{{name}}</view><view class="subtitle">上级授权会覆盖其下全部资源；如果只允许访问一个容器，不要同时勾选其节点或环境。</view></view>
+  <view class="hero"><view class="eyebrow">RESOURCE ACCESS</view><view class="title">{{name}}</view><view class="subtitle">资源管理员可以运维、换 Tag，并在不超出自身范围的前提下继续授权。</view></view>
   <view wx:if="{{error}}" class="error">{{error}}</view>
-  <view class="card row"><view class="row-main"><view class="row-title">自定义资源范围</view><text class="row-subtitle">关闭后，该成员可以访问全部资源</text></view><switch checked="{{restricted}}" color="#118e83" bindchange="changeMode" /></view>
+  <view class="card row"><view class="row-main"><view class="row-title">自定义资源范围</view><text class="row-subtitle">{{partial ? '你只能修改自己管理范围内的授权' : '关闭后，该成员可以访问全部资源'}}</text></view><switch checked="{{restricted}}" disabled="{{!allowUnrestricted}}" color="#118e83" bindchange="changeMode" /></view>
   <view wx:if="{{loading}}" class="loading">加载可授权资源…</view>
   <block wx:if="{{restricted}}">
     <view wx:if="{{!rows.length}}" class="empty">暂无资源，请等待 Agent 上报</view>
     <view wx:for="{{rows}}" wx:key="scopeKey" class="card access-row depth-{{item.depth}}">
-      <switch checked="{{item.checked}}" color="#118e83" data-index="{{index}}" bindchange="toggleRule" />
-      <view class="row-main"><view class="row-title">{{item.label}}</view><text class="row-subtitle">{{item.note}}</text></view>
-      <picker range="{{item.levels}}" value="{{item.levelIndex}}" data-index="{{index}}" bindchange="changeLevel"><view class="level {{item.checked ? '' : 'disabled'}}">{{item.levels[item.levelIndex]}}</view></picker>
+      <switch checked="{{item.checked}}" disabled="{{!item.editable}}" color="#118e83" data-index="{{index}}" bindchange="toggleRule" />
+      <view class="row-main"><view class="row-title">{{item.label}}</view><text class="row-subtitle">{{item.note}}{{item.editable ? '' : ' · 仅用于定位'}}</text></view>
+      <picker disabled="{{!item.editable}}" range="{{item.levels}}" value="{{item.levelIndex}}" data-index="{{index}}" bindchange="changeLevel"><view class="level {{item.editable ? '' : 'disabled'}}">{{item.levels[item.levelIndex]}}</view></picker>
     </view>
   </block>
   <button class="button save" loading="{{saving}}" bindtap="save">保存权限</button>

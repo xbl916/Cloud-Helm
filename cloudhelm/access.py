@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from cloudhelm.models import AccessRule, Container, Node, User, UserRole
 
-Permission = Literal["view", "logs", "operate"]
+Permission = Literal["view", "logs", "operate", "manage"]
 
 
 def load_access_rules(db: Session, user: User) -> list[AccessRule]:
@@ -17,11 +17,15 @@ def load_access_rules(db: Session, user: User) -> list[AccessRule]:
 
 
 def _permission_granted(rule: AccessRule, permission: Permission) -> bool:
+    if rule.can_manage:
+        return True
     if permission == "view":
         return rule.can_view
     if permission == "logs":
         return rule.can_logs
-    return rule.can_operate
+    if permission == "operate":
+        return rule.can_operate
+    return False
 
 
 def _rule_matches(
@@ -53,7 +57,11 @@ def can_access(
 ) -> bool:
     if user.role == UserRole.admin:
         return True
+    if permission == "manage" and user.role != UserRole.operator:
+        return False
     if permission == "operate" and user.role != UserRole.operator:
+        return False
+    if permission == "manage" and not user.resource_restricted:
         return False
     if not user.resource_restricted:
         return True
@@ -73,6 +81,24 @@ def can_access(
     return any(
         _permission_granted(rule, permission) and _rule_matches(rule, node, container)
         for rule in rules
+    )
+
+
+def can_manage_resources(db: Session, user: User) -> bool:
+    if user.role == UserRole.admin:
+        return True
+    if user.role != UserRole.operator or not user.resource_restricted:
+        return False
+    return (
+        db.scalar(
+            select(AccessRule.id)
+            .where(
+                AccessRule.user_id == user.id,
+                AccessRule.can_manage.is_(True),
+            )
+            .limit(1)
+        )
+        is not None
     )
 
 

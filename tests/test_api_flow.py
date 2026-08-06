@@ -348,6 +348,8 @@ def test_health_and_frontend(client: TestClient):
     assert "restricted:false,rules:[]" in script.text
     assert "renderNodeSystem(node)" in script.text
     assert "writable_layer_bytes" in script.text
+    assert "can_manage:level==='manage'" in script.text
+    assert "state.user.can_manage_access" in script.text
 
     style = client.get("/assets/app.css")
     assert style.status_code == 200
