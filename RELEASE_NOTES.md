@@ -22,6 +22,7 @@
 
 ## 发布产物
 
+- `main` 的 CI 成功后自动创建缺失的 `v0.6.4` 标签，再触发现有多架构 Release 流水线；已存在标签不会被覆盖。
 - `cloudhelm-0.6.4.tar.gz`：架构无关源码、部署文件与小程序代码。
 - `cloudhelm-0.6.4.tar.gz.sha256`：源码包完整性校验。
 - `ghcr.io/xbl916/cloud-helm-server:0.6.4`：`linux/amd64`、`linux/arm64`。
