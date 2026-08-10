@@ -517,6 +517,11 @@ def list_users(db: Db, manager: CurrentUser) -> list[dict]:
     if not can_manage_resources(db, manager):
         raise HTTPException(status_code=403, detail="需要全局或资源管理权限")
     global_admin = manager.role == UserRole.admin
+    manage_counts: dict[str, int] = {}
+    for rule in db.scalars(
+        select(AccessRule).where(AccessRule.can_manage.is_(True))
+    ).all():
+        manage_counts[rule.user_id] = manage_counts.get(rule.user_id, 0) + 1
     return [
         {
             "id": user.id,
@@ -526,6 +531,8 @@ def list_users(db: Db, manager: CurrentUser) -> list[dict]:
             "role": user.role,
             "is_active": user.is_active,
             "resource_restricted": user.resource_restricted,
+            "access_version": user.access_version,
+            "resource_admin_count": manage_counts.get(user.id, 0),
             "can_edit_account": global_admin and user.id != manager.id,
             "can_edit_access": (
                 user.role != UserRole.admin
@@ -862,6 +869,119 @@ def _can_manage_scope(
     )
 
 
+def _serialized_rule(rule: AccessRule | dict) -> dict:
+    return {
+        "scope_type": _scope_value(rule, "scope_type"),
+        "environment": _scope_value(rule, "environment"),
+        "node_id": _scope_value(rule, "node_id"),
+        "project": _scope_value(rule, "project"),
+        "container_id": _scope_value(rule, "container_id"),
+        "can_view": bool(_scope_value(rule, "can_view")),
+        "can_logs": bool(_scope_value(rule, "can_logs")),
+        "can_operate": bool(_scope_value(rule, "can_operate")),
+        "can_manage": bool(_scope_value(rule, "can_manage")),
+    }
+
+
+def _rule_level(rule: AccessRule | dict) -> str:
+    if _scope_value(rule, "can_manage"):
+        return "manage"
+    if _scope_value(rule, "can_operate"):
+        return "operate"
+    if _scope_value(rule, "can_logs"):
+        return "logs"
+    return "view"
+
+
+def _prepare_access_change(
+    db: Db, manager: User, user: User, payload: AccessConfigInput
+) -> tuple[list[dict], list[AccessRule], bool, list[AccessRule]]:
+    if user.role == UserRole.admin and payload.restricted:
+        raise HTTPException(status_code=409, detail="管理员始终拥有全部资源权限")
+    scoped_manager = manager.role != UserRole.admin
+    if scoped_manager and (
+        user.role == UserRole.admin
+        or user.id == manager.id
+        or not user.resource_restricted
+    ):
+        raise HTTPException(status_code=403, detail="不能修改该账号的资源范围")
+    if scoped_manager and not payload.restricted:
+        raise HTTPException(status_code=403, detail="资源管理员不能授予全部资源")
+    if payload.expected_version is not None and payload.expected_version != user.access_version:
+        raise HTTPException(
+            status_code=409,
+            detail="资源权限已被其他管理员修改，请刷新后重新确认",
+        )
+
+    nodes = {node.id: node for node in db.scalars(select(Node)).all()}
+    containers = {item.id: item for item in db.scalars(select(Container)).all()}
+    deduplicated = {_rule_identity(rule): rule for rule in payload.rules}
+    validated = (
+        [_validate_rule(rule, nodes, containers) for rule in deduplicated.values()]
+        if payload.restricted
+        else []
+    )
+    if user.role != UserRole.operator and any(item["can_manage"] for item in validated):
+        raise HTTPException(status_code=422, detail="只有运维角色可以设为资源管理员")
+    management_rules = _management_rules(db, manager)
+    if scoped_manager and any(
+        not _can_manage_scope(manager, management_rules, item, nodes, containers)
+        for item in validated
+    ):
+        raise HTTPException(status_code=403, detail="不能授予自身管理范围之外的资源")
+    existing = list(
+        db.scalars(select(AccessRule).where(AccessRule.user_id == user.id)).all()
+    )
+    editable_existing = (
+        [
+            rule
+            for rule in existing
+            if _can_manage_scope(
+                manager, management_rules, rule, nodes, containers
+            )
+        ]
+        if scoped_manager
+        else existing
+    )
+    return validated, editable_existing, scoped_manager, management_rules
+
+
+def _access_diff(existing: list[AccessRule], validated: list[dict]) -> dict:
+    before = {_scope_key(rule): rule for rule in existing}
+    after = {_scope_key(rule): rule for rule in validated}
+    added = [
+        {"scope": key, "level": _rule_level(after[key])}
+        for key in sorted(after.keys() - before.keys())
+    ]
+    removed = [
+        {"scope": key, "level": _rule_level(before[key])}
+        for key in sorted(before.keys() - after.keys())
+    ]
+    changed = [
+        {
+            "scope": key,
+            "from": _rule_level(before[key]),
+            "to": _rule_level(after[key]),
+        }
+        for key in sorted(before.keys() & after.keys())
+        if _rule_level(before[key]) != _rule_level(after[key])
+    ]
+    elevated = sum(
+        item["level"] == "manage" for item in added
+    ) + sum(item["to"] == "manage" and item["from"] != "manage" for item in changed)
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "summary": {
+            "added": len(added),
+            "removed": len(removed),
+            "changed": len(changed),
+            "management_elevations": elevated,
+        },
+    }
+
+
 @router.get("/access/resources")
 def access_resources(db: Db, manager: CurrentUser) -> dict:
     if not can_manage_resources(db, manager):
@@ -1004,24 +1124,124 @@ def get_user_access(user_id: str, db: Db, manager: CurrentUser) -> dict:
         rules = all_rules
     return {
         "user_id": user.id,
+        "version": user.access_version,
         "restricted": user.resource_restricted,
         "admin_bypass": user.role == UserRole.admin,
         "partial": scoped_manager,
         "allow_unrestricted": not scoped_manager,
-        "rules": [
-            {
-                "scope_type": rule.scope_type,
-                "environment": rule.environment,
-                "node_id": rule.node_id,
-                "project": rule.project,
-                "container_id": rule.container_id,
-                "can_view": rule.can_view,
-                "can_logs": rule.can_logs,
-                "can_operate": rule.can_operate,
-                "can_manage": rule.can_manage,
+        "rules": [_serialized_rule(rule) for rule in rules],
+    }
+
+
+@router.post("/users/{user_id}/access/preview")
+def preview_user_access(
+    user_id: str,
+    payload: AccessConfigInput,
+    db: Db,
+    manager: CurrentUser,
+) -> dict:
+    if not can_manage_resources(db, manager):
+        raise HTTPException(status_code=403, detail="需要全局或资源管理权限")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    validated, existing, scoped_manager, _ = _prepare_access_change(
+        db, manager, user, payload
+    )
+    return {
+        "user_id": user.id,
+        "version": user.access_version,
+        "partial": scoped_manager,
+        "restricted_changed": (
+            not scoped_manager and user.resource_restricted != payload.restricted
+        ),
+        **_access_diff(existing, validated),
+    }
+
+
+@router.get("/users/{user_id}/access/effective")
+def effective_user_access(user_id: str, db: Db, manager: CurrentUser) -> dict:
+    if not can_manage_resources(db, manager):
+        raise HTTPException(status_code=403, detail="需要全局或资源管理权限")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    nodes = {item.id: item for item in db.scalars(select(Node)).all()}
+    containers = {
+        item.id: item
+        for item in db.scalars(
+            select(Container).where(Container.present.is_(True))
+        ).all()
+    }
+    target_rules = list(
+        db.scalars(select(AccessRule).where(AccessRule.user_id == user.id)).all()
+    )
+    management_rules = _management_rules(db, manager)
+
+    def manager_can_see(candidate: dict) -> bool:
+        return _can_manage_scope(
+            manager, management_rules, candidate, nodes, containers
+        )
+
+    resources = []
+    for node in nodes.values():
+        node_candidate = {"scope_type": "node", "node_id": node.id}
+        if manager_can_see(node_candidate):
+            resources.append(
+                {
+                    "scope_type": "node",
+                    "resource_id": node.id,
+                    "node_id": node.id,
+                    "name": node.name,
+                    "permissions": {
+                        permission: can_access(
+                            user, target_rules, node, permission=permission
+                        )
+                        for permission in ("view", "logs", "operate", "manage")
+                    },
+                    "sources": [
+                        _scope_key(rule)
+                        for rule in target_rules
+                        if _scope_contains(rule, node_candidate, nodes, containers)
+                    ]
+                    or (["global-role"] if not user.resource_restricted else []),
+                }
+            )
+        for container in (
+            item for item in containers.values() if item.node_id == node.id
+        ):
+            candidate = {
+                "scope_type": "container",
+                "node_id": node.id,
+                "container_id": container.id,
             }
-            for rule in rules
-        ],
+            if not manager_can_see(candidate):
+                continue
+            resources.append(
+                {
+                    "scope_type": "container",
+                    "resource_id": container.id,
+                    "node_id": node.id,
+                    "name": container.name,
+                    "permissions": {
+                        permission: can_access(
+                            user, target_rules, node, container, permission
+                        )
+                        for permission in ("view", "logs", "operate", "manage")
+                    },
+                    "sources": [
+                        _scope_key(rule)
+                        for rule in target_rules
+                        if _scope_contains(rule, candidate, nodes, containers)
+                    ]
+                    or (["global-role"] if not user.resource_restricted else []),
+                }
+            )
+    return {
+        "user_id": user.id,
+        "version": user.access_version,
+        "admin_bypass": user.role == UserRole.admin,
+        "resources": resources,
     }
 
 
@@ -1039,47 +1259,32 @@ def update_user_access(
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if user.role == UserRole.admin and payload.restricted:
-        raise HTTPException(status_code=409, detail="管理员始终拥有全部资源权限")
-    scoped_manager = manager.role != UserRole.admin
-    if scoped_manager and (
-        user.role == UserRole.admin
-        or user.id == manager.id
-        or not user.resource_restricted
-    ):
-        raise HTTPException(status_code=403, detail="不能修改该账号的资源范围")
-    if scoped_manager and not payload.restricted:
-        raise HTTPException(status_code=403, detail="资源管理员不能授予全部资源")
-
+    validated, existing, scoped_manager, management_rules = _prepare_access_change(
+        db, manager, user, payload
+    )
+    if payload.expected_version is not None:
+        version_update = db.execute(
+            update(User)
+            .where(
+                User.id == user.id,
+                User.access_version == payload.expected_version,
+            )
+            .values(access_version=User.access_version + 1)
+            .execution_options(synchronize_session=False)
+        )
+        if version_update.rowcount != 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="资源权限已被其他管理员修改，请刷新后重新确认",
+            )
+        db.refresh(user)
+    else:
+        user.access_version += 1
     nodes = {node.id: node for node in db.scalars(select(Node)).all()}
     containers = {item.id: item for item in db.scalars(select(Container)).all()}
-    deduplicated: dict[tuple, AccessRuleInput] = {
-        _rule_identity(rule): rule for rule in payload.rules
-    }
-    validated = (
-        [_validate_rule(rule, nodes, containers) for rule in deduplicated.values()]
-        if payload.restricted
-        else []
-    )
-    if user.role != UserRole.operator and any(
-        values["can_manage"] for values in validated
-    ):
-        raise HTTPException(status_code=422, detail="只有运维角色可以设为资源管理员")
-    management_rules = _management_rules(db, manager)
-    if scoped_manager and any(
-        not _can_manage_scope(
-            manager, management_rules, values, nodes, containers
-        )
-        for values in validated
-    ):
-        raise HTTPException(status_code=403, detail="不能授予自身管理范围之外的资源")
 
     if scoped_manager:
-        existing = list(
-            db.scalars(
-                select(AccessRule).where(AccessRule.user_id == user.id)
-            ).all()
-        )
         removed = 0
         for rule in existing:
             if _can_manage_scope(
@@ -1114,4 +1319,92 @@ def update_user_access(
         "restricted": user.resource_restricted,
         "rules": len(validated),
         "partial": scoped_manager,
+        "version": user.access_version,
     }
+
+
+@router.delete(
+    "/users/{user_id}/access/management", status_code=status.HTTP_204_NO_CONTENT
+)
+def revoke_user_management(
+    user_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> None:
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    result = db.execute(
+        update(AccessRule)
+        .where(AccessRule.user_id == user.id, AccessRule.can_manage.is_(True))
+        .values(can_manage=False)
+    )
+    user.access_version += 1
+    add_audit(
+        db,
+        action="user.access.management.revoke",
+        target_type="user",
+        target_id=user.id,
+        target_name=user.username,
+        user=admin,
+        detail=f"rules={result.rowcount}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+
+
+@router.get("/access/managers")
+def list_resource_managers(
+    db: Db,
+    manager: CurrentUser,
+    node_id: str = Query(min_length=1, max_length=36),
+    container_id: str | None = Query(default=None, max_length=36),
+) -> dict:
+    node = db.get(Node, node_id)
+    container = db.get(Container, container_id) if container_id else None
+    if not node or (container_id and (not container or container.node_id != node.id)):
+        raise HTTPException(status_code=404, detail="资源不存在")
+    candidate = {
+        "scope_type": "container" if container else "node",
+        "node_id": node.id,
+        "container_id": container.id if container else None,
+    }
+    nodes = {item.id: item for item in db.scalars(select(Node)).all()}
+    containers = {item.id: item for item in db.scalars(select(Container)).all()}
+    if manager.role != UserRole.admin and not _can_manage_scope(
+        manager, _management_rules(db, manager), candidate, nodes, containers
+    ):
+        raise HTTPException(status_code=403, detail="需要该资源的管理权限")
+    users = {item.id: item for item in db.scalars(select(User)).all()}
+    entries = [
+        {
+            "user_id": user.id,
+            "display_name": user.display_name,
+            "wecom_userid": user.wecom_userid,
+            "global": True,
+            "sources": ["global-admin"],
+        }
+        for user in users.values()
+        if user.role == UserRole.admin and user.is_active
+    ]
+    sources_by_user: dict[str, list[str]] = {}
+    for rule in db.scalars(
+        select(AccessRule).where(AccessRule.can_manage.is_(True))
+    ).all():
+        user = users.get(rule.user_id)
+        if user and user.is_active and _scope_contains(rule, candidate, nodes, containers):
+            sources_by_user.setdefault(user.id, []).append(_scope_key(rule))
+    entries.extend(
+        {
+            "user_id": user_id,
+            "display_name": users[user_id].display_name,
+            "wecom_userid": users[user_id].wecom_userid,
+            "global": False,
+            "sources": sorted(sources),
+        }
+        for user_id, sources in sorted(sources_by_user.items())
+    )
+    return {"node_id": node.id, "container_id": container_id, "managers": entries}

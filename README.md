@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.6.3`。支持从 `0.5.2` SQLite 原地升级，新增字段由 Server 启动时自动、幂等迁移，不会重建已有表或清空用户、权限、节点、容器及审计数据。
+当前版本为 `0.6.4`。支持从 `0.5.2` SQLite 原地升级；Server 会先执行完整性检查并创建按版本命名的一致性备份，再通过有版本记录的幂等迁移补充字段，不会重建已有表或清空用户、权限、节点、容器及审计数据。
 
 快速导航：
 
@@ -93,15 +93,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.6.3.tar.gz.sha256
-tar -xzf cloudhelm-0.6.3.tar.gz
-cd cloudhelm-0.6.3
+sha256sum -c cloudhelm-0.6.4.tar.gz.sha256
+tar -xzf cloudhelm-0.6.4.tar.gz
+cd cloudhelm-0.6.4
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.6.3.tar.gz: OK
+cloudhelm-0.6.4.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -330,7 +330,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.6.3/deploy
+cd cloudhelm-0.6.4/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -455,7 +455,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-s
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.6.3 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+0.6.4 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -549,7 +549,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.3 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.4 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
@@ -570,10 +570,13 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 资源管理员可以给已经存在的普通成员配置授权，但服务端只允许其修改自身管理范围内的规则：不能创建、停用、下线或修改账号，不能修改自己或全局管理员，不能授予“全部资源”，也不能通过节点级规则扩大一个容器管理员的范围。目标成员在其他设备上的既有规则会原样保留。页面禁用和隐藏只用于提示，所有边界均由服务端再次校验，不能通过直接构造 API 或输入容器 ID 绕过。
 
+保存权限时，H5 和小程序会先调用服务端预览接口，显示新增、移除、级别调整和新增管理权的数量，再要求二次确认。读取配置时返回的 `version` 会作为 `expected_version` 随保存请求提交；若另一位管理员已在此期间修改同一成员，服务端返回 `409` 并拒绝覆盖，刷新后才能重新确认。管理员可通过有效权限接口查看某成员在节点/容器上的最终权限及来源，也可反查某个节点或容器当前由哪些全局或资源管理员管理。
+
 全局管理员还可以：
 
 - 点击“下线”立即撤销某人的全部云舵会话；
 - 点击“停用”阻止后续访问并撤销现有会话；
+- 点击“撤销管理权”一次关闭某人的全部 `can_manage`，同时保留原有查看、日志和运维权限；
 - 通过 `PATCH /api/v1/users/{id}` 调整显示名、角色或企微 `UserId`，身份或角色变化会自动撤销该用户现有会话。
 
 ## 企业自用小程序
@@ -714,7 +717,9 @@ module.exports = {
 
 ## 从 0.5.2 SQLite 原地升级
 
-升级会给 `nodes` 和 `containers` 表补充监控列、给既有 `access_rules` 表补充默认关闭的 `can_manage` 字段，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并且可安全重复执行。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
+升级会给 `nodes` 和 `containers` 表补充监控列、给既有 `access_rules` 表补充默认关闭的 `can_manage` 字段、给 `users` 增加从 `1` 开始的权限版本号，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并记录在 `schema_migrations`，再次启动不会重复执行。
+
+SQLite 启动升级前会运行 `PRAGMA integrity_check`，并在数据库旁创建一次 `cloudhelm.db.pre-0.6.4.bak` 一致性备份；升级后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -736,7 +741,7 @@ docker compose logs --tail=100 server
 curl --fail https://ops.company.com/healthz
 ```
 
-日志中会逐项记录首次补充的监控列。再次重启不会重复迁移。随后确认企微登录、用户列表和既有容器授权仍然正常。
+日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
 每台 Agent 节点也必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -854,7 +859,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.6.3
+bash scripts/package-release.sh 0.6.4
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -862,11 +867,11 @@ bash scripts/package-release.sh 0.6.3
 推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
 
 ```bash
-git tag v0.6.3
-git push origin v0.6.3
+git tag v0.6.4
+git push origin v0.6.4
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.6.3`
-- `ghcr.io/xbl916/cloud-helm-agent:0.6.3`
+- `ghcr.io/xbl916/cloud-helm-server:0.6.4`
+- `ghcr.io/xbl916/cloud-helm-agent:0.6.4`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.3` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.4` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

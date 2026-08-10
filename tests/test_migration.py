@@ -32,6 +32,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         item["name"] for item in inspector.get_columns("access_rules")
     }
     assert "can_manage" in access_rule_columns
+    assert "access_version" in user_columns
     assert {
         "gpu_devices_json",
         "gpu_all",
@@ -120,9 +121,16 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     assert set(monitoring_columns["nodes"]).issubset(node_columns)
     assert set(monitoring_columns["containers"]).issubset(container_columns)
     assert "can_manage" in access_rule_columns
+    user_columns = {item["name"] for item in inspector.get_columns("users")}
+    assert "access_version" in user_columns
+    assert "schema_migrations" in inspector.get_table_names()
     with old_engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT COUNT(*) FROM schema_migrations")
+        ).scalar_one() == 4
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
             == "原容器"
         )
+    assert list(tmp_path.glob("cloudhelm-0.5.2.db.pre-*.bak"))

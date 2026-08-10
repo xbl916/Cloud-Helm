@@ -52,6 +52,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     resource_restricted: Mapped[bool] = mapped_column(Boolean, default=True)
+    access_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
