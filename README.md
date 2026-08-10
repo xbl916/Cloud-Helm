@@ -864,7 +864,7 @@ bash scripts/package-release.sh 0.6.4
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
 
-推送与项目版本一致的标签会自动创建 GitHub Release，并发布两个 OCI 多架构镜像：
+`main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
 git tag v0.6.4
