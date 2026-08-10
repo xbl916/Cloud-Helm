@@ -169,12 +169,22 @@ class SystemMonitor:
         return counters
 
     @staticmethod
-    def _cpu_counters(payload: str) -> tuple[int, int]:
-        first = payload.splitlines()[0].split()
+    def _cpu_counters(payload: str) -> tuple[int, int, int]:
+        lines = payload.splitlines()
+        first = lines[0].split()
         if not first or first[0] != "cpu" or len(first) < 5:
             raise ValueError("invalid /proc/stat CPU counters")
         values = [max(0, int(value)) for value in first[1:]]
-        return sum(values), values[3] + (values[4] if len(values) > 4 else 0)
+        cpu_count = sum(
+            1
+            for line in lines[1:]
+            if line.split() and line.split()[0].removeprefix("cpu").isdigit()
+        )
+        return (
+            sum(values),
+            values[3] + (values[4] if len(values) > 4 else 0),
+            cpu_count or 1,
+        )
 
     @staticmethod
     def _memory(payload: str) -> dict[str, int | float]:
@@ -261,7 +271,7 @@ class SystemMonitor:
             counters = self._network_counters(
                 self.network_stats_path.read_text(encoding="utf-8"), set(selected)
             )
-            cpu_total, cpu_idle = self._cpu_counters(
+            cpu_total, cpu_idle, cpu_count = self._cpu_counters(
                 self.cpu_stats_path.read_text(encoding="utf-8")
             )
             memory = self._memory(
@@ -296,6 +306,7 @@ class SystemMonitor:
                 status="ok",
                 metrics={
                     "cpu_percent": round(cpu_percent, 2),
+                    "cpu_count": cpu_count,
                     **memory,
                     "load_1": load_1,
                     "load_5": load_5,

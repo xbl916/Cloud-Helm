@@ -125,6 +125,12 @@ class Node(Base):
     gpu_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    gpu_expected_count: Mapped[int] = mapped_column(Integer, default=0)
+    network_baseline_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    network_baseline_samples: Mapped[int] = mapped_column(Integer, default=0)
+    network_surge_percent: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     system_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     system_metrics_status: Mapped[str] = mapped_column(
         String(20), default="unavailable"
@@ -175,6 +181,9 @@ class Container(Base):
     network_tx_bps: Mapped[float] = mapped_column(Float, default=0.0)
     writable_layer_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     rootfs_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    writable_layer_growth_mibps: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
     block_read_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     block_write_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     block_read_bps: Mapped[float] = mapped_column(Float, default=0.0)
@@ -279,6 +288,15 @@ class AlertRule(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AlertRuleSeed(Base):
+    __tablename__ = "alert_rule_seeds"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    seeded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
     )
 
 

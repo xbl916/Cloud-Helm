@@ -223,6 +223,9 @@ def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
                 "gpu_updated_at": _iso(node.gpu_updated_at)
                 if gpu_metrics_visible
                 else None,
+                "gpu_expected_count": node.gpu_expected_count
+                if gpu_metrics_visible
+                else None,
                 "gpus": gpus,
                 "system_metrics_status": node.system_metrics_status
                 if host_metrics_visible
@@ -258,6 +261,44 @@ def list_containers(node_id: str, db: Db, user: CurrentUser) -> list[dict]:
     if not visible and not can_access(user, rules, node, permission="view"):
         raise HTTPException(status_code=404, detail="节点不存在")
     return [_container_dict(item) for item in visible]
+
+
+@router.post("/nodes/{node_id}/gpu-baseline/reset")
+def reset_gpu_baseline(
+    node_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> dict:
+    node = db.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    if node.gpu_status != "ok":
+        raise HTTPException(status_code=409, detail="GPU 监控正常后才能重设基线")
+    previous = node.gpu_expected_count
+    node.gpu_expected_count = len(_node_gpus(node))
+    db.execute(
+        delete(AlertState).where(
+            AlertState.node_id == node.id,
+            AlertState.rule_id.in_(
+                select(AlertRule.id).where(AlertRule.metric == "node_gpu_missing")
+            ),
+        )
+    )
+    add_audit(
+        db,
+        action="node.gpu_baseline.reset",
+        target_type="node",
+        target_id=node.id,
+        target_name=node.name,
+        user=admin,
+        detail=f"expected_gpu_count={previous}->{node.gpu_expected_count}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return {"node_id": node.id, "gpu_expected_count": node.gpu_expected_count}
 
 
 @router.get("/containers/{container_id}")
@@ -303,6 +344,11 @@ def _container_dict(item: Container) -> dict:
         "network_tx_bps": round(item.network_tx_bps, 2),
         "writable_layer_bytes": item.writable_layer_bytes,
         "rootfs_bytes": item.rootfs_bytes,
+        "writable_layer_growth_mibps": (
+            round(item.writable_layer_growth_mibps, 3)
+            if item.writable_layer_growth_mibps is not None
+            else None
+        ),
         "block_read_bytes": item.block_read_bytes,
         "block_write_bytes": item.block_write_bytes,
         "block_read_bps": round(item.block_read_bps, 2),

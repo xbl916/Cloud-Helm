@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.7.1`。企微告警接收人改为在 H5 人员权限界面配置：全资源账号可统一订阅，受限账号可按环境、节点、项目或容器独立订阅；发送前会按当前账号状态和资源权限重新校验。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
+当前版本为 `0.8.0`。告警范围扩展到 GPU 利用率/显存/温度/掉卡、动态网络流量突增、容器磁盘增长、异常退出、按 CPU 核数归一化的宿主机负载、Swap 和指标采集失效；GPU 基线可由管理员审计式重设。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
 
 快速导航：
 
@@ -94,15 +94,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.7.1.tar.gz.sha256
-tar -xzf cloudhelm-0.7.1.tar.gz
-cd cloudhelm-0.7.1
+sha256sum -c cloudhelm-0.8.0.tar.gz.sha256
+tar -xzf cloudhelm-0.8.0.tar.gz
+cd cloudhelm-0.8.0
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.7.1.tar.gz: OK
+cloudhelm-0.8.0.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -339,7 +339,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.7.1/deploy
+cd cloudhelm-0.8.0/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -558,7 +558,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.7.1 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.8.0 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
@@ -566,18 +566,32 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 ## 监控告警与企业微信通知
 
-0.7.1 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。首次启动会创建以下默认规则，管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
+0.8.0 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。升级会按指标补充缺少的新规则，不覆盖已有同指标规则的阈值和开关；自 0.8.0 起还会记录默认规则播种状态，之后主动删除的规则不会在重启时恢复。管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
 
-|默认规则|默认阈值|连续次数|级别|
-|---|---:|---:|---|
-|节点离线|使用 `CLOUDHELM_NODE_OFFLINE_SECONDS`|1|严重|
-|节点内存过高|≥ 90%|3|警告|
-|节点根磁盘空间不足|≥ 90%|1|严重|
-|节点 inode 空间不足|≥ 90%|1|严重|
-|容器内存过高|≥ 95%|3|警告|
-|容器健康检查失败|异常|1|严重|
-|容器发生 OOM Kill|是|1|严重|
-|容器反复重启|是|2|警告|
+|默认规则|默认阈值|连续次数|级别|默认启用|
+|---|---:|---:|---|---:|
+|节点离线|使用 `CLOUDHELM_NODE_OFFLINE_SECONDS`|1|严重|是|
+|节点内存过高|≥ 90%|3|警告|是|
+|节点根磁盘空间不足|≥ 90%|1|严重|是|
+|节点 inode 空间不足|≥ 90%|1|严重|是|
+|容器内存过高|≥ 95%|3|警告|是|
+|容器健康检查失败|异常|1|严重|是|
+|容器发生 OOM Kill|是|1|严重|是|
+|容器反复重启|连续处于 `restarting`|2|警告|是|
+|GPU 使用率过高|≥ 98%|4|警告|否|
+|GPU 显存使用率过高|≥ 95%|3|警告|否|
+|GPU 温度过高|≥ 85°C|2|严重|是|
+|GPU 掉卡或监控异常|缺少 ≥ 1 张|2|严重|是|
+|节点网络流量突增|高于动态基线 ≥ 300%|1|警告|否|
+|容器可写层增长过快|≥ 1 MiB/s|1|警告|否|
+|容器异常退出|退出码非 0|1|严重|是|
+|宿主机负载过高|1 分钟负载 ÷ CPU 核数 ≥ 150%|4|警告|是|
+|宿主机 Swap 使用率过高|≥ 80%|3|警告|是|
+|宿主机指标采集失效|连续失败|2|严重|是|
+
+GPU 使用率和显存占满在训练场景通常属于正常行为，网络与磁盘增长阈值也高度依赖链路和业务，因此这四条规则默认创建但关闭，管理员评估工作负载后再开启。GPU 温度取节点所有卡的最高值；显存使用率取所有可读取卡的最高百分比。掉卡检测在首次正常上报时记录卡数，只提高、不自动降低基线，因此单卡消失、`nvidia-smi` 异常或已有 GPU 节点误用非 GPU Agent 配置都会触发；计划移除或更换显卡后，可在节点 GPU 区域点击“重设 GPU 基线”，该操作只允许全局管理员并写入审计日志。
+
+网络突增使用收发总速率的指数动态基线，先预热 4 次心跳，并要求当前总流量至少 10 MiB/s 才参与判断，避免启动和空闲链路抖动。容器磁盘增长由 Agent 按真实 `docker system df` 查询间隔计算；默认每 300 秒采样一次，首次采样不计算增长，未刷新磁盘数据的普通 15 秒心跳不会重复累计。宿主机负载按逻辑 CPU 数归一化，100% 表示 1 分钟 load average 等于 CPU 核数。
 
 规则可应用到全部资源、某个环境、节点或容器。管理员还可通过 API 创建 CPU 等额外规则；修改规则会清空该规则旧的连续计数和活动状态，避免新阈值继承旧状态。系统只在状态从正常变为异常时写一条“触发”事件，从异常恢复时写一条“恢复”事件，不会每次心跳重复写库。
 
@@ -762,11 +776,11 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.5.2–0.7.0 原地升级到 0.7.1
+## 从 0.5.2–0.7.1 原地升级到 0.8.0
 
-从 0.7.0 升级时，0.7.1 只会给 `users` 增加 `alert_notifications`、给 `access_rules` 增加 `alert_notify` 两个默认关闭的布尔列，并写入 `0006_alert_subscriptions` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表和告警表。迁移不会重建已有表，也不会修改已有用户、企微身份、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
+从 0.7.1 升级时，0.8.0 会给节点增加 GPU 数量基线和网络动态基线字段，给容器增加可写层增长速率字段，创建 `alert_rule_seeds` 默认规则播种记录表，并写入 `0007_extended_alert_metrics` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表、告警表和按资源告警订阅字段。迁移不会重建已有表，也不会修改已有用户、企微身份、既有告警订阅、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
 
-SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.7.1.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加变量也能启动；如果从 0.7.0 继承了 `CLOUDHELM_ALERT_WECOM_USERIDS`，0.7.1 会安全忽略它，建议删除以免误以为仍由该变量控制收件人。升级后所有人员订阅默认关闭，管理员必须在“用户 → 权限与告警”中显式开启。
+SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.8.0.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不需要增加变量；如果更早版本遗留了 `CLOUDHELM_ALERT_WECOM_USERIDS`，0.8.0 会安全忽略它，建议删除。0.7.1 已配置的人员告警订阅会原样保留，新补充规则是否通知仍受各规则开关、全局通知开关和人员订阅三层控制。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -790,7 +804,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-本次功能只涉及 Server、数据库和 H5，不强制升级 Agent：0.6.4 或 0.7.0 Agent 均与 0.7.1 Server 兼容。为了镜像版本统一可以把 Agent 镜像更新为 0.7.1，但无需修改 `agent.env`、重新注册或删除状态目录；从 0.7.0 升级也无需修改 Agent Compose。
+0.8.0 Server 可以接收旧 Agent 心跳，但“按 CPU 核数归一化的宿主机负载”和“按真实磁盘查询间隔计算的容器可写层增长”需要 0.8.0 Agent 新字段，因此建议所有节点同步升级 Agent。升级只需更新镜像/复制新版 `agent.compose.yml`，无需修改 `agent.env`、重新注册、删除状态目录或改动 GPU overlay；保留 `deploy/cloudhelm-data` 即可沿用节点独立凭据。GPU、网络、退出码等基于既有字段的告警在 Agent 尚未升级时仍可工作。
 
 如果从 0.5.2、0.6.0 等尚未采用宿主机网络视图的版本升级，每台 Agent 节点必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -908,7 +922,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.7.1
+bash scripts/package-release.sh 0.8.0
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -916,11 +930,11 @@ bash scripts/package-release.sh 0.7.1
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.7.1
-git push origin v0.7.1
+git tag v0.8.0
+git push origin v0.8.0
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.7.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.7.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.8.0`
+- `ghcr.io/xbl916/cloud-helm-agent:0.8.0`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.7.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.8.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

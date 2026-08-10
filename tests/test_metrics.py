@@ -107,6 +107,7 @@ def test_system_monitor_reports_host_disk_and_network_rates(tmp_path: Path):
     first = monitor.snapshot()
     assert first.status == "ok"
     assert first.metrics["disk_total_bytes"] > 0
+    assert first.metrics["cpu_count"] == 1
     assert first.metrics["network_interfaces"] == ["ens65f0np0", "ens65f1np1"]
     assert first.metrics["network_rx_bytes"] == 4000
     assert first.metrics["network_tx_bytes"] == 6000
@@ -261,3 +262,43 @@ def test_docker_inventory_reports_network_rates_and_disk_sizes(from_env, monkeyp
     assert second["pids"] == 5
     assert second["restart_count"] == 3
     assert client.df.call_count == 1
+
+
+@patch("cloudhelm_agent.docker_runtime.docker.from_env")
+def test_container_disk_growth_uses_real_disk_query_interval(from_env, monkeypatch):
+    client = from_env.return_value
+    container = Mock()
+    container.id = "diskgrowth123456"
+    container.name = "writer"
+    container.status = "exited"
+    container.image.tags = ["example/writer:1"]
+    container.attrs = {
+        "Config": {"Image": "example/writer:1", "Labels": {}},
+        "State": {"Running": False, "Status": "exited", "ExitCode": 0},
+        "HostConfig": {},
+        "NetworkSettings": {"Ports": {}},
+    }
+    client.containers.list.return_value = [container]
+    client.df.side_effect = [
+        {"Containers": [{"Id": container.id, "SizeRw": 1024, "SizeRootFs": 2048}]},
+        {
+            "Containers": [
+                {
+                    "Id": container.id,
+                    "SizeRw": 300 * 1024 * 1024 + 1024,
+                    "SizeRootFs": 301 * 1024 * 1024,
+                }
+            ]
+        },
+    ]
+    ticks = iter([0.0, 300.0])
+    monkeypatch.setattr(
+        "cloudhelm_agent.docker_runtime.time.monotonic", lambda: next(ticks)
+    )
+    runtime = DockerRuntime(disk_query_seconds=300)
+
+    first = runtime.inventory()[0]
+    second = runtime.inventory()[0]
+
+    assert first["writable_layer_growth_mibps"] is None
+    assert second["writable_layer_growth_mibps"] == 1.0

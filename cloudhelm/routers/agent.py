@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 from sqlalchemy import select, update
 
-from cloudhelm.alerts import evaluate_heartbeat_alerts, send_alert_notification
+from cloudhelm.alerts import (
+    evaluate_heartbeat_alerts,
+    send_alert_notification,
+    update_node_alert_baselines,
+)
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import AgentNode, Config, Db
 from cloudhelm.metrics import record_metric_history
@@ -71,6 +75,7 @@ def heartbeat(
     settings: Config,
 ) -> Response:
     now = datetime.now(UTC)
+    update_node_alert_baselines(node, payload)
     node.hostname = payload.hostname
     node.agent_version = payload.agent_version
     node.docker_version = payload.docker_version
@@ -126,6 +131,7 @@ def heartbeat(
         item.network_tx_bps = snapshot.network_tx_bps
         item.writable_layer_bytes = snapshot.writable_layer_bytes
         item.rootfs_bytes = snapshot.rootfs_bytes
+        item.writable_layer_growth_mibps = snapshot.writable_layer_growth_mibps
         item.block_read_bytes = snapshot.block_read_bytes
         item.block_write_bytes = snapshot.block_write_bytes
         item.block_read_bps = snapshot.block_read_bps

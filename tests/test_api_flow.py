@@ -50,7 +50,8 @@ def test_agent_inventory_and_task_flow(
                         "tx_bps": 1024.25,
                     }
                 ],
-                "cpu_percent": 36.5,
+                    "cpu_percent": 36.5,
+                    "cpu_count": 32,
                 "memory_total_bytes": 34359738368,
                 "memory_used_bytes": 12884901888,
                 "memory_available_bytes": 21474836480,
@@ -108,8 +109,9 @@ def test_agent_inventory_and_task_flow(
                     "network_tx_bytes": 25000,
                     "network_rx_bps": 512.5,
                     "network_tx_bps": 256.25,
-                    "writable_layer_bytes": 1048576,
-                    "rootfs_bytes": 52428800,
+                        "writable_layer_bytes": 1048576,
+                        "rootfs_bytes": 52428800,
+                        "writable_layer_growth_mibps": 1.5,
                     "block_read_bytes": 2097152,
                     "block_write_bytes": 3145728,
                     "block_read_bps": 1024.5,
@@ -144,9 +146,11 @@ def test_agent_inventory_and_task_flow(
     assert nodes.json()[0]["container_count"] == 2
     assert nodes.json()[0]["gpu_status"] == "ok"
     assert nodes.json()[0]["gpus"][0]["uuid"] == "GPU-12345678"
+    assert nodes.json()[0]["gpu_expected_count"] == 2
     assert nodes.json()[0]["system_metrics_status"] == "ok"
     assert nodes.json()[0]["system_metrics"]["disk_used_bytes"] == 400000000
     assert nodes.json()[0]["system_metrics"]["cpu_percent"] == 36.5
+    assert nodes.json()[0]["system_metrics"]["cpu_count"] == 32
     assert nodes.json()[0]["system_metrics"]["network_interface_metrics"][0] == {
         "name": "ens65f0np0",
         "addresses": ["192.0.2.10/24"],
@@ -155,6 +159,12 @@ def test_agent_inventory_and_task_flow(
         "rx_bps": 2048.5,
         "tx_bps": 1024.25,
     }
+    reset_gpu_baseline = client.post(
+        f"/api/v1/nodes/{credentials['node_id']}/gpu-baseline/reset",
+        headers=admin_headers,
+    )
+    assert reset_gpu_baseline.status_code == 200
+    assert reset_gpu_baseline.json()["gpu_expected_count"] == 2
 
     dashboard = client.get("/api/v1/dashboard", headers=admin_headers)
     assert dashboard.status_code == 200
@@ -182,6 +192,7 @@ def test_agent_inventory_and_task_flow(
     assert container["gpu_all"] is False
     assert container["network_rx_bps"] == 512.5
     assert container["writable_layer_bytes"] == 1048576
+    assert container["writable_layer_growth_mibps"] == 1.5
     assert container["block_write_bps"] == 2048.25
     assert container["pids"] == 12
     assert container["restart_count"] == 2
@@ -354,6 +365,8 @@ def test_health_and_frontend(client: TestClient):
     assert "expected_version" in script.text
     assert "global_alert_notify" in script.text
     assert "data-alert-notify" in script.text
+    assert "node_gpu_temperature_c" in script.text
+    assert "/gpu-baseline/reset" in script.text
 
     access_alert_style = client.get("/assets/access-alerts.css")
     assert access_alert_style.status_code == 200

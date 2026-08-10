@@ -34,7 +34,7 @@ class DockerRuntime:
     def inventory(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         containers = self.client.containers.list(all=True)[: self.max_containers]
-        disk_sizes = self._container_disk_sizes()
+        disk_sizes, disk_growth_rates = self._container_disk_sizes()
         seen: set[str] = set()
         for container in containers:
             seen.add(container.id)
@@ -70,6 +70,7 @@ class DockerRuntime:
                 except DockerException:
                     pass
             writable_layer_bytes, rootfs_bytes = disk_sizes.get(container.id, (0, 0))
+            writable_layer_growth_mibps = disk_growth_rates.get(container.id)
             image = str((attrs.get("Config") or {}).get("Image") or "")
             if not image and container.image.tags:
                 image = container.image.tags[0]
@@ -96,6 +97,11 @@ class DockerRuntime:
                     "network_tx_bps": round(network_tx_bps, 2),
                     "writable_layer_bytes": writable_layer_bytes,
                     "rootfs_bytes": rootfs_bytes,
+                    "writable_layer_growth_mibps": (
+                        round(writable_layer_growth_mibps / (1024 * 1024), 3)
+                        if writable_layer_growth_mibps is not None
+                        else None
+                    ),
                     "block_read_bytes": block_read_bytes,
                     "block_write_bytes": block_write_bytes,
                     "block_read_bps": round(block_read_bps, 2),
@@ -124,15 +130,19 @@ class DockerRuntime:
         }
         return result
 
-    def _container_disk_sizes(self) -> dict[str, tuple[int, int]]:
+    def _container_disk_sizes(
+        self,
+    ) -> tuple[dict[str, tuple[int, int]], dict[str, float]]:
         now = time.monotonic()
         if now - self._disk_sizes_updated_at < self.disk_query_seconds:
-            return self._disk_sizes
+            return self._disk_sizes, {}
+        previous_sizes = self._disk_sizes
+        previous_updated_at = self._disk_sizes_updated_at
         self._disk_sizes_updated_at = now
         try:
             usage = self.client.df()
             containers = usage.get("Containers") or []
-            self._disk_sizes = {
+            current_sizes = {
                 str(item.get("Id")): (
                     max(0, int(item.get("SizeRw") or 0)),
                     max(0, int(item.get("SizeRootFs") or 0)),
@@ -141,8 +151,17 @@ class DockerRuntime:
                 if item.get("Id")
             }
         except (DockerException, TypeError, ValueError):
-            pass
-        return self._disk_sizes
+            return self._disk_sizes, {}
+        growth_rates: dict[str, float] = {}
+        elapsed = now - previous_updated_at
+        if previous_sizes and elapsed > 0:
+            growth_rates = {
+                docker_id: max(0, sizes[0] - previous_sizes[docker_id][0]) / elapsed
+                for docker_id, sizes in current_sizes.items()
+                if docker_id in previous_sizes
+            }
+        self._disk_sizes = current_sizes
+        return self._disk_sizes, growth_rates
 
     @staticmethod
     def _network(stats: dict[str, Any]) -> tuple[int, int]:

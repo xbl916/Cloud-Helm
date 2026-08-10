@@ -5,10 +5,12 @@ from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session
 
 from cloudhelm.alerts import (
+    _node_value,
     evaluate_heartbeat_alerts,
     evaluate_offline_alerts,
     seed_default_alert_rules,
     send_alert_notification,
+    update_node_alert_baselines,
 )
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
@@ -162,6 +164,228 @@ def test_offline_alert_uses_configured_rule_threshold(tmp_path):
         event = db.get(AlertEvent, event_ids[0])
         assert event is not None
         assert event.status == AlertStatus.triggered
+
+
+def test_extended_default_rules_are_seeded_once(tmp_path):
+    target_engine = create_engine(f"sqlite:///{tmp_path / 'default-alerts.db'}")
+    initialize_database(target_engine)
+    settings = get_settings()
+    with Session(target_engine) as db:
+        seed_default_alert_rules(db, settings)
+        rules = {rule.metric: rule for rule in db.scalars(select(AlertRule)).all()}
+        assert len(rules) == 18
+        assert rules["node_gpu_temperature_c"].enabled is True
+        assert rules["node_gpu_utilization_percent"].enabled is False
+        assert rules["node_network_surge_percent"].enabled is False
+        removed = rules["container_disk_growth_mibps"]
+        db.delete(removed)
+        db.commit()
+        seed_default_alert_rules(db, settings)
+        assert db.scalar(
+            select(AlertRule).where(
+                AlertRule.metric == "container_disk_growth_mibps"
+            )
+        ) is None
+
+
+def test_extended_alert_metrics_trigger_and_recover(tmp_path):
+    target_engine = create_engine(f"sqlite:///{tmp_path / 'extended-alerts.db'}")
+    initialize_database(target_engine)
+    settings = get_settings()
+    now = datetime.now(UTC)
+    metrics = [
+        "node_gpu_utilization_percent",
+        "node_gpu_memory_percent",
+        "node_gpu_temperature_c",
+        "node_gpu_missing",
+        "node_network_surge_percent",
+        "node_load_percent",
+        "node_swap_percent",
+        "container_disk_growth_mibps",
+        "container_exit_abnormal",
+    ]
+    with Session(target_engine) as db:
+        rules = [
+            AlertRule(
+                name=f"测试-{metric}",
+                metric=metric,
+                threshold={
+                    "node_gpu_utilization_percent": 95,
+                    "node_gpu_memory_percent": 90,
+                    "node_gpu_temperature_c": 85,
+                    "node_gpu_missing": 1,
+                    "node_network_surge_percent": 300,
+                    "node_load_percent": 150,
+                    "node_swap_percent": 80,
+                    "container_disk_growth_mibps": 1,
+                    "container_exit_abnormal": 1,
+                }[metric],
+            )
+            for metric in metrics
+        ]
+        node = Node(
+            agent_key="extended-alert-node",
+            name="扩展告警节点",
+            agent_token_hash="hash",
+            gpu_expected_count=2,
+            network_surge_percent=500,
+        )
+        db.add_all([*rules, node])
+        db.flush()
+        container = Container(
+            node_id=node.id,
+            docker_id="extended-alert-container",
+            name="扩展告警容器",
+            status="exited",
+            exit_code=137,
+            writable_layer_growth_mibps=2,
+        )
+        db.add(container)
+        db.flush()
+        high = HeartbeatRequest.model_validate(
+            {
+                "gpu_status": "ok",
+                "gpus": [
+                    {
+                        "index": 0,
+                        "uuid": "GPU-hot",
+                        "name": "Hot GPU",
+                        "utilization_gpu": 99,
+                        "memory_used_mib": 950,
+                        "memory_total_mib": 1000,
+                        "temperature_c": 90,
+                    }
+                ],
+                "system_metrics_status": "ok",
+                "system_metrics": {
+                    "cpu_count": 4,
+                    "load_1": 8,
+                    "swap_total_bytes": 100,
+                    "swap_used_bytes": 90,
+                },
+            }
+        )
+        triggered = evaluate_heartbeat_alerts(
+            db, node, [container], high, now, settings
+        )
+        db.commit()
+        assert len(triggered) == len(metrics)
+
+        node.network_surge_percent = 0
+        container.status = "running"
+        container.exit_code = 0
+        container.writable_layer_growth_mibps = 0
+        normal = HeartbeatRequest.model_validate(
+            {
+                "gpu_status": "ok",
+                "gpus": [
+                    {
+                        "index": index,
+                        "uuid": f"GPU-cool-{index}",
+                        "name": "Cool GPU",
+                        "utilization_gpu": 10,
+                        "memory_used_mib": 100,
+                        "memory_total_mib": 1000,
+                        "temperature_c": 40,
+                    }
+                    for index in range(2)
+                ],
+                "system_metrics_status": "ok",
+                "system_metrics": {
+                    "cpu_count": 4,
+                    "load_1": 1,
+                    "swap_total_bytes": 100,
+                    "swap_used_bytes": 10,
+                },
+            }
+        )
+        recovered = evaluate_heartbeat_alerts(
+            db, node, [container], normal, now + timedelta(seconds=15), settings
+        )
+        db.commit()
+        assert len(recovered) == len(metrics)
+
+
+def test_alert_baselines_warm_up_and_track_expected_gpus():
+    node = Node(
+        agent_key="baseline-node",
+        name="Baseline Node",
+        agent_token_hash="hash",
+    )
+
+    def heartbeat(rate_mib: float) -> HeartbeatRequest:
+        return HeartbeatRequest.model_validate(
+            {
+                "gpu_status": "ok",
+                "gpus": [
+                    {"index": index, "uuid": f"GPU-{index}", "name": "GPU"}
+                    for index in range(2)
+                ],
+                "system_metrics_status": "ok",
+                "system_metrics": {
+                    "network_rx_bps": rate_mib * 1024 * 1024,
+                },
+            }
+        )
+
+    for _ in range(4):
+        update_node_alert_baselines(node, heartbeat(5))
+        assert node.network_surge_percent is None
+    update_node_alert_baselines(node, heartbeat(30))
+    assert node.gpu_expected_count == 2
+    assert node.network_surge_percent == 500
+
+
+def test_gpu_monitor_disabled_after_baseline_counts_as_missing():
+    node = Node(
+        agent_key="gpu-disabled-node",
+        name="GPU Disabled Node",
+        agent_token_hash="hash",
+        gpu_expected_count=2,
+    )
+    assert _node_value(
+        "node_gpu_missing", HeartbeatRequest(gpu_status="disabled"), node
+    ) == 2
+
+
+def test_host_metrics_unavailable_requires_two_reports(tmp_path):
+    target_engine = create_engine(f"sqlite:///{tmp_path / 'metrics-down.db'}")
+    initialize_database(target_engine)
+    settings = get_settings()
+    now = datetime.now(UTC)
+    with Session(target_engine) as db:
+        rule = AlertRule(
+            name="测试指标采集失效",
+            metric="node_metrics_unavailable",
+            threshold=1,
+            consecutive_required=2,
+        )
+        node = Node(
+            agent_key="metrics-down-node",
+            name="指标失效节点",
+            agent_token_hash="hash",
+        )
+        db.add_all([rule, node])
+        db.commit()
+        unavailable = HeartbeatRequest(system_metrics_status="error")
+        assert evaluate_heartbeat_alerts(
+            db, node, [], unavailable, now, settings
+        ) == []
+        triggered = evaluate_heartbeat_alerts(
+            db, node, [], unavailable, now + timedelta(seconds=15), settings
+        )
+        db.commit()
+        assert len(triggered) == 1
+        recovered = evaluate_heartbeat_alerts(
+            db,
+            node,
+            [],
+            HeartbeatRequest(system_metrics_status="ok"),
+            now + timedelta(seconds=30),
+            settings,
+        )
+        db.commit()
+        assert len(recovered) == 1
 
 
 def test_admin_can_manage_alert_rules(client, admin_headers, session_for):

@@ -12,7 +12,12 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
     user_columns = {item["name"] for item in inspector.get_columns("users")}
     assert "wecom_userid" in user_columns
     assert "password_hash" not in user_columns
-    assert {"web_sessions", "oauth_states", "metric_samples"}.issubset(
+    assert {
+        "web_sessions",
+        "oauth_states",
+        "metric_samples",
+        "alert_rule_seeds",
+    }.issubset(
         inspector.get_table_names()
     )
     node_columns = {item["name"] for item in inspector.get_columns("nodes")}
@@ -21,6 +26,10 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "gpu_status",
         "gpu_error",
         "gpu_updated_at",
+        "gpu_expected_count",
+        "network_baseline_bps",
+        "network_baseline_samples",
+        "network_surge_percent",
         "system_metrics_json",
         "system_metrics_status",
         "system_metrics_error",
@@ -44,6 +53,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "network_tx_bps",
         "writable_layer_bytes",
         "rootfs_bytes",
+        "writable_layer_growth_mibps",
         "block_read_bytes",
         "block_write_bytes",
         "block_read_bps",
@@ -85,6 +95,10 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
             "system_metrics_error",
             "system_metrics_updated_at",
             "metrics_history_at",
+            "gpu_expected_count",
+            "network_baseline_bps",
+            "network_baseline_samples",
+            "network_surge_percent",
         ],
         "containers": [
             "network_rx_bytes",
@@ -93,6 +107,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
             "network_tx_bps",
             "writable_layer_bytes",
             "rootfs_bytes",
+            "writable_layer_growth_mibps",
             "block_read_bytes",
             "block_write_bytes",
             "block_read_bps",
@@ -131,7 +146,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.connect() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 6
+        ).scalar_one() == 7
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()

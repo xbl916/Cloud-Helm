@@ -114,6 +114,20 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
                 },
             },
         ),
+        (
+            "0007_extended_alert_metrics",
+            {
+                "nodes": {
+                    "gpu_expected_count": "INTEGER NOT NULL DEFAULT 0",
+                    "network_baseline_bps": "FLOAT NOT NULL DEFAULT 0",
+                    "network_baseline_samples": "INTEGER NOT NULL DEFAULT 0",
+                    "network_surge_percent": "FLOAT",
+                },
+                "containers": {
+                    "writable_layer_growth_mibps": "FLOAT",
+                },
+            },
+        ),
     ]
 
 

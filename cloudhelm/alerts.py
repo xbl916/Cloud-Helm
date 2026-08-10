@@ -12,6 +12,7 @@ from cloudhelm.models import (
     AccessRule,
     AlertEvent,
     AlertRule,
+    AlertRuleSeed,
     AlertState,
     AlertStatus,
     Container,
@@ -31,33 +32,101 @@ METRIC_LABELS = {
     "container_unhealthy": "容器健康检查异常",
     "container_oom_killed": "容器 OOM Kill",
     "container_restarting": "容器反复重启",
+    "node_gpu_utilization_percent": "GPU 使用率",
+    "node_gpu_memory_percent": "GPU 显存使用率",
+    "node_gpu_temperature_c": "GPU 温度",
+    "node_gpu_missing": "GPU 掉卡或监控异常",
+    "node_network_surge_percent": "节点网络流量突增",
+    "container_disk_growth_mibps": "容器可写层增长速度",
+    "container_exit_abnormal": "容器异常退出",
+    "node_load_percent": "宿主机 1 分钟负载率",
+    "node_swap_percent": "宿主机 Swap 使用率",
+    "node_metrics_unavailable": "宿主机指标采集失效",
 }
+
+METRIC_UNITS = {
+    "node_cpu_percent": "%",
+    "node_memory_percent": "%",
+    "node_disk_percent": "%",
+    "node_inode_percent": "%",
+    "container_cpu_percent": "%",
+    "container_memory_percent": "%",
+    "node_gpu_utilization_percent": "%",
+    "node_gpu_memory_percent": "%",
+    "node_gpu_temperature_c": "°C",
+    "node_gpu_missing": " 张",
+    "node_network_surge_percent": "%",
+    "container_disk_growth_mibps": " MiB/s",
+    "node_load_percent": "%",
+    "node_swap_percent": "%",
+}
+
+NETWORK_SURGE_MIN_BPS = 10 * 1024 * 1024
+NETWORK_BASELINE_FLOOR_BPS = 1024 * 1024
 
 
 def seed_default_alert_rules(db: Session, settings: Settings) -> None:
-    if db.scalar(select(AlertRule.id).limit(1)) is not None:
-        return
     defaults = [
-        ("节点离线", "node_offline", float(settings.node_offline_seconds), 1, "critical"),
-        ("节点内存过高", "node_memory_percent", 90.0, 3, "warning"),
-        ("节点根磁盘空间不足", "node_disk_percent", 90.0, 1, "critical"),
-        ("节点 inode 空间不足", "node_inode_percent", 90.0, 1, "critical"),
-        ("容器内存过高", "container_memory_percent", 95.0, 3, "warning"),
-        ("容器健康检查失败", "container_unhealthy", 1.0, 1, "critical"),
-        ("容器发生 OOM Kill", "container_oom_killed", 1.0, 1, "critical"),
-        ("容器反复重启", "container_restarting", 1.0, 2, "warning"),
+        ("node-offline", "节点离线", "node_offline", float(settings.node_offline_seconds), 1, "critical", True),
+        ("node-memory", "节点内存过高", "node_memory_percent", 90.0, 3, "warning", True),
+        ("node-disk", "节点根磁盘空间不足", "node_disk_percent", 90.0, 1, "critical", True),
+        ("node-inode", "节点 inode 空间不足", "node_inode_percent", 90.0, 1, "critical", True),
+        ("container-memory", "容器内存过高", "container_memory_percent", 95.0, 3, "warning", True),
+        ("container-health", "容器健康检查失败", "container_unhealthy", 1.0, 1, "critical", True),
+        ("container-oom", "容器发生 OOM Kill", "container_oom_killed", 1.0, 1, "critical", True),
+        ("container-restarting", "容器反复重启", "container_restarting", 1.0, 2, "warning", True),
+        ("gpu-utilization", "GPU 使用率过高", "node_gpu_utilization_percent", 98.0, 4, "warning", False),
+        ("gpu-memory", "GPU 显存使用率过高", "node_gpu_memory_percent", 95.0, 3, "warning", False),
+        ("gpu-temperature", "GPU 温度过高", "node_gpu_temperature_c", 85.0, 2, "critical", True),
+        ("gpu-missing", "GPU 掉卡或监控异常", "node_gpu_missing", 1.0, 2, "critical", True),
+        ("network-surge", "节点网络流量突增", "node_network_surge_percent", 300.0, 1, "warning", False),
+        ("container-disk-growth", "容器可写层增长过快", "container_disk_growth_mibps", 1.0, 1, "warning", False),
+        ("container-exit", "容器异常退出", "container_exit_abnormal", 1.0, 1, "critical", True),
+        ("node-load", "宿主机负载过高", "node_load_percent", 150.0, 4, "warning", True),
+        ("node-swap", "宿主机 Swap 使用率过高", "node_swap_percent", 80.0, 3, "warning", True),
+        ("node-metrics", "宿主机指标采集失效", "node_metrics_unavailable", 1.0, 2, "critical", True),
     ]
-    for name, metric, threshold, consecutive, severity in defaults:
-        db.add(
-            AlertRule(
-                name=name,
-                metric=metric,
-                threshold=threshold,
-                consecutive_required=consecutive,
-                severity=severity,
+    for key, name, metric, threshold, consecutive, severity, enabled in defaults:
+        if db.get(AlertRuleSeed, key):
+            continue
+        if not db.scalar(select(AlertRule.id).where(AlertRule.metric == metric)):
+            db.add(
+                AlertRule(
+                    name=name,
+                    metric=metric,
+                    threshold=threshold,
+                    consecutive_required=consecutive,
+                    severity=severity,
+                    enabled=enabled,
+                )
             )
-        )
+        db.add(AlertRuleSeed(key=key))
     db.commit()
+
+
+def update_node_alert_baselines(node: Node, payload: HeartbeatRequest) -> None:
+    """Update durable baselines once per heartbeat, independent of rule count."""
+    if payload.gpu_status == "ok":
+        node.gpu_expected_count = max(node.gpu_expected_count or 0, len(payload.gpus))
+    if payload.system_metrics_status != "ok":
+        node.network_surge_percent = None
+        return
+    current = (
+        payload.system_metrics.network_rx_bps
+        + payload.system_metrics.network_tx_bps
+    )
+    baseline = node.network_baseline_bps or 0.0
+    samples = node.network_baseline_samples or 0
+    node.network_surge_percent = None
+    if samples >= 4 and current >= NETWORK_SURGE_MIN_BPS:
+        node.network_surge_percent = max(
+            0.0,
+            (current - baseline) / max(baseline, NETWORK_BASELINE_FLOOR_BPS) * 100,
+        )
+    node.network_baseline_bps = (
+        current if samples == 0 else baseline * 0.9 + current * 0.1
+    )
+    node.network_baseline_samples = min(samples + 1, 1000000)
 
 
 def _scope_matches(
@@ -76,7 +145,43 @@ def _percent(used: float, total: float) -> float:
     return float(used) / float(total) * 100 if total else 0.0
 
 
-def _node_value(metric: str, payload: HeartbeatRequest) -> float | None:
+def _node_value(
+    metric: str, payload: HeartbeatRequest, node: Node
+) -> float | None:
+    if metric == "node_metrics_unavailable":
+        return float(payload.system_metrics_status != "ok")
+    if metric == "node_gpu_missing":
+        expected_count = node.gpu_expected_count or 0
+        if expected_count <= 0:
+            return None
+        current = len(payload.gpus) if payload.gpu_status == "ok" else 0
+        return float(max(0, expected_count - current))
+    if metric.startswith("node_gpu_"):
+        if payload.gpu_status != "ok" or not payload.gpus:
+            return None
+        if metric == "node_gpu_utilization_percent":
+            values = [
+                gpu.utilization_gpu
+                for gpu in payload.gpus
+                if gpu.utilization_gpu is not None
+            ]
+        elif metric == "node_gpu_memory_percent":
+            values = [
+                gpu.memory_used_mib / gpu.memory_total_mib * 100
+                for gpu in payload.gpus
+                if gpu.memory_used_mib is not None and gpu.memory_total_mib
+            ]
+        elif metric == "node_gpu_temperature_c":
+            values = [
+                gpu.temperature_c
+                for gpu in payload.gpus
+                if gpu.temperature_c is not None
+            ]
+        else:
+            return None
+        return float(max(values)) if values else None
+    if metric == "node_network_surge_percent":
+        return node.network_surge_percent
     if payload.system_metrics_status != "ok":
         return None
     system = payload.system_metrics
@@ -87,8 +192,17 @@ def _node_value(metric: str, payload: HeartbeatRequest) -> float | None:
         "node_inode_percent": _percent(
             system.disk_inodes_used, system.disk_inodes_total
         ),
+        "node_load_percent": (
+            system.load_1 / system.cpu_count * 100 if system.cpu_count else None
+        ),
+        "node_swap_percent": (
+            _percent(system.swap_used_bytes, system.swap_total_bytes)
+            if system.swap_total_bytes
+            else None
+        ),
     }
-    return float(values[metric]) if metric in values else None
+    value = values.get(metric)
+    return float(value) if value is not None else None
 
 
 def _container_value(metric: str, container: Container) -> float | None:
@@ -98,8 +212,14 @@ def _container_value(metric: str, container: Container) -> float | None:
         "container_unhealthy": float(container.health == "unhealthy"),
         "container_oom_killed": float(container.oom_killed),
         "container_restarting": float(container.status == "restarting"),
+        "container_disk_growth_mibps": container.writable_layer_growth_mibps,
+        "container_exit_abnormal": float(
+            container.status in {"exited", "dead"}
+            and container.exit_code not in {None, 0}
+        ),
     }
-    return float(values[metric]) if metric in values else None
+    value = values.get(metric)
+    return float(value) if value is not None else None
 
 
 def _is_breached(rule: AlertRule, value: float) -> bool:
@@ -110,9 +230,10 @@ def _event_message(
     rule: AlertRule, target_name: str, value: float, status: AlertStatus
 ) -> str:
     metric = METRIC_LABELS.get(rule.metric, rule.metric)
+    unit = METRIC_UNITS.get(rule.metric, "")
     state = "触发" if status == AlertStatus.triggered else "恢复"
     return (
-        f"{state}：{target_name} · {metric} 当前 {value:.2f}，"
+        f"{state}：{target_name} · {metric} 当前 {value:.2f}{unit}，"
         f"阈值 {rule.operator} {rule.threshold:g}"
     )
 
@@ -223,7 +344,7 @@ def evaluate_heartbeat_alerts(
     created = False
     for rule in rules:
         if rule.metric.startswith("node_"):
-            value = _node_value(rule.metric, payload)
+            value = _node_value(rule.metric, payload, node)
             if value is not None and _scope_matches(rule, node):
                 event_id = _evaluate(
                     db, rule, node, "node", node.id, node.name, value, now

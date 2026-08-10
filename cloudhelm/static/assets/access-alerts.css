@@ -11,6 +11,20 @@
   color: #405c67;
 }
 
+.gpu-section-head {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gpu-baseline-button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: #356471;
+  padding: 6px 9px;
+  font-size: 9px;
+}
+
 .alert-subscribe {
   white-space: nowrap;
 }

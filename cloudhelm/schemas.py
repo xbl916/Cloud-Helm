@@ -104,6 +104,16 @@ class AlertRuleInput(BaseModel):
         "container_unhealthy",
         "container_oom_killed",
         "container_restarting",
+        "node_gpu_utilization_percent",
+        "node_gpu_memory_percent",
+        "node_gpu_temperature_c",
+        "node_gpu_missing",
+        "node_network_surge_percent",
+        "container_disk_growth_mibps",
+        "container_exit_abnormal",
+        "node_load_percent",
+        "node_swap_percent",
+        "node_metrics_unavailable",
     ]
     operator: Literal["gte", "lte"] = "gte"
     threshold: float = Field(ge=0, le=1000000)
@@ -145,6 +155,7 @@ class ContainerSnapshot(BaseModel):
     network_tx_bps: float = Field(default=0, ge=0)
     writable_layer_bytes: int = Field(default=0, ge=0)
     rootfs_bytes: int = Field(default=0, ge=0)
+    writable_layer_growth_mibps: float | None = Field(default=None, ge=0)
     block_read_bytes: int = Field(default=0, ge=0)
     block_write_bytes: int = Field(default=0, ge=0)
     block_read_bps: float = Field(default=0, ge=0)
@@ -192,6 +203,7 @@ class NetworkInterfaceMetricsSnapshot(BaseModel):
 
 class SystemMetricsSnapshot(BaseModel):
     cpu_percent: float = Field(default=0, ge=0, le=100)
+    cpu_count: int = Field(default=0, ge=0, le=65536)
     memory_total_bytes: int = Field(default=0, ge=0)
     memory_used_bytes: int = Field(default=0, ge=0)
     memory_available_bytes: int = Field(default=0, ge=0)
