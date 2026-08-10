@@ -352,6 +352,12 @@ def test_health_and_frontend(client: TestClient):
     assert "state.user.can_manage_access" in script.text
     assert "/access/preview" in script.text
     assert "expected_version" in script.text
+    assert "global_alert_notify" in script.text
+    assert "data-alert-notify" in script.text
+
+    access_alert_style = client.get("/assets/access-alerts.css")
+    assert access_alert_style.status_code == 200
+    assert ".alert-subscribe" in access_alert_style.text
 
     style = client.get("/assets/app.css")
     assert style.status_code == 200

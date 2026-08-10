@@ -776,10 +776,12 @@ def list_users(db: Db, manager: CurrentUser) -> list[dict]:
         raise HTTPException(status_code=403, detail="需要全局或资源管理权限")
     global_admin = manager.role == UserRole.admin
     manage_counts: dict[str, int] = {}
-    for rule in db.scalars(
-        select(AccessRule).where(AccessRule.can_manage.is_(True))
-    ).all():
-        manage_counts[rule.user_id] = manage_counts.get(rule.user_id, 0) + 1
+    alert_counts: dict[str, int] = {}
+    for rule in db.scalars(select(AccessRule)).all():
+        if rule.can_manage:
+            manage_counts[rule.user_id] = manage_counts.get(rule.user_id, 0) + 1
+        if rule.alert_notify:
+            alert_counts[rule.user_id] = alert_counts.get(rule.user_id, 0) + 1
     return [
         {
             "id": user.id,
@@ -791,11 +793,16 @@ def list_users(db: Db, manager: CurrentUser) -> list[dict]:
             "resource_restricted": user.resource_restricted,
             "access_version": user.access_version,
             "resource_admin_count": manage_counts.get(user.id, 0),
+            "global_alert_notifications": user.alert_notifications,
+            "alert_subscription_count": alert_counts.get(user.id, 0),
             "can_edit_account": global_admin and user.id != manager.id,
             "can_edit_access": (
-                user.role != UserRole.admin
-                and user.id != manager.id
-                and (global_admin or user.resource_restricted)
+                global_admin
+                or (
+                    user.role != UserRole.admin
+                    and user.id != manager.id
+                    and user.resource_restricted
+                )
             ),
             "created_at": _iso(user.created_at),
         }
@@ -875,17 +882,22 @@ def update_user(
     changes = payload.model_dump(exclude_unset=True)
     if payload.display_name is not None:
         user.display_name = payload.display_name
+    was_admin = user.role == UserRole.admin
     if payload.role is not None:
         user.role = payload.role
         if payload.role == UserRole.admin:
             user.resource_restricted = False
             db.execute(delete(AccessRule).where(AccessRule.user_id == user.id))
-        elif payload.role == UserRole.viewer:
-            db.execute(
-                update(AccessRule)
-                .where(AccessRule.user_id == user.id)
-                .values(can_manage=False)
-            )
+        else:
+            if was_admin:
+                user.resource_restricted = True
+                user.alert_notifications = False
+            if payload.role == UserRole.viewer:
+                db.execute(
+                    update(AccessRule)
+                    .where(AccessRule.user_id == user.id)
+                    .values(can_manage=False)
+                )
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.wecom_userid is not None:
@@ -998,6 +1010,7 @@ def _validate_rule(
         "can_logs": payload.can_logs or payload.can_operate or elevated,
         "can_operate": payload.can_operate or elevated,
         "can_manage": elevated,
+        "alert_notify": payload.alert_notify,
     }
     if payload.scope_type == "all":
         return values
@@ -1138,6 +1151,7 @@ def _serialized_rule(rule: AccessRule | dict) -> dict:
         "can_logs": bool(_scope_value(rule, "can_logs")),
         "can_operate": bool(_scope_value(rule, "can_operate")),
         "can_manage": bool(_scope_value(rule, "can_manage")),
+        "alert_notify": bool(_scope_value(rule, "alert_notify")),
     }
 
 
@@ -1220,13 +1234,28 @@ def _access_diff(existing: list[AccessRule], validated: list[dict]) -> dict:
             "scope": key,
             "from": _rule_level(before[key]),
             "to": _rule_level(after[key]),
+            "from_alert_notify": bool(_scope_value(before[key], "alert_notify")),
+            "to_alert_notify": bool(_scope_value(after[key], "alert_notify")),
         }
         for key in sorted(before.keys() & after.keys())
         if _rule_level(before[key]) != _rule_level(after[key])
+        or bool(_scope_value(before[key], "alert_notify"))
+        != bool(_scope_value(after[key], "alert_notify"))
     ]
     elevated = sum(
         item["level"] == "manage" for item in added
     ) + sum(item["to"] == "manage" and item["from"] != "manage" for item in changed)
+    notification_changes = sum(
+        item["from_alert_notify"] != item["to_alert_notify"] for item in changed
+    )
+    notification_changes += sum(
+        bool(_scope_value(after[key], "alert_notify"))
+        for key in after.keys() - before.keys()
+    )
+    notification_changes += sum(
+        bool(_scope_value(before[key], "alert_notify"))
+        for key in before.keys() - after.keys()
+    )
     return {
         "added": added,
         "removed": removed,
@@ -1236,6 +1265,7 @@ def _access_diff(existing: list[AccessRule], validated: list[dict]) -> dict:
             "removed": len(removed),
             "changed": len(changed),
             "management_elevations": elevated,
+            "notification_changes": notification_changes,
         },
     }
 
@@ -1384,6 +1414,7 @@ def get_user_access(user_id: str, db: Db, manager: CurrentUser) -> dict:
         "user_id": user.id,
         "version": user.access_version,
         "restricted": user.resource_restricted,
+        "global_alert_notify": user.alert_notifications,
         "admin_bypass": user.role == UserRole.admin,
         "partial": scoped_manager,
         "allow_unrestricted": not scoped_manager,
@@ -1412,6 +1443,11 @@ def preview_user_access(
         "partial": scoped_manager,
         "restricted_changed": (
             not scoped_manager and user.resource_restricted != payload.restricted
+        ),
+        "global_alert_notify_changed": (
+            not scoped_manager
+            and user.alert_notifications
+            != (payload.global_alert_notify if not payload.restricted else False)
         ),
         **_access_diff(existing, validated),
     }
@@ -1553,6 +1589,9 @@ def update_user_access(
     else:
         db.execute(delete(AccessRule).where(AccessRule.user_id == user.id))
         user.resource_restricted = payload.restricted
+        user.alert_notifications = (
+            payload.global_alert_notify if not payload.restricted else False
+        )
         removed = -1
     if payload.restricted:
         for values in validated:
@@ -1566,6 +1605,7 @@ def update_user_access(
         user=manager,
         detail=(
             f"restricted={payload.restricted}, rules={len(validated)}, "
+            f"global_alert_notify={user.alert_notifications}, "
             f"partial={scoped_manager}, replaced={removed}"
         ),
         request=request,
@@ -1575,6 +1615,7 @@ def update_user_access(
     return {
         "user_id": user.id,
         "restricted": user.resource_restricted,
+        "global_alert_notify": user.alert_notifications,
         "rules": len(validated),
         "partial": scoped_manager,
         "version": user.access_version,

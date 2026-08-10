@@ -7,8 +7,9 @@
     <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/app.css?v=0.7.0" />
-    <link rel="stylesheet" href="/assets/gpu.css?v=0.7.0" />
+    <link rel="stylesheet" href="/assets/app.css?v=0.7.1" />
+    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.7.1" />
+    <link rel="stylesheet" href="/assets/gpu.css?v=0.7.1" />
     <title>云舵 Cloud Helm</title>
   </head>
   <body>
@@ -85,7 +86,7 @@
           <div class="settings-card">
             <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
             <div><span>节点通信</span><strong>独立令牌</strong></div>
-            <div><span>版本</span><strong>Cloud Helm 0.7.0</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.7.1</strong></div>
           </div>
           <section id="admin-users" class="admin-users hidden">
             <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
@@ -160,12 +161,13 @@
       <section class="access-panel">
         <header><div><p class="eyebrow">RESOURCE ACCESS</p><h2 id="access-title">资源权限</h2></div><button type="button" data-close-access>×</button></header>
         <label class="access-mode-label">可见范围<select id="access-mode"><option value="global">全部资源（沿用角色权限）</option><option value="restricted">自定义资源范围</option></select></label>
+        <label id="global-alert-notify-row" class="global-alert-notify"><input id="global-alert-notify" type="checkbox" /> 接收全部可见资源的企微告警通知</label>
         <p id="access-hint" class="access-hint">全部资源模式保持原有角色权限。</p>
         <div id="access-tree" class="access-tree hidden"></div>
         <p id="access-error" class="form-error"></p>
-        <footer><button type="button" data-close-access>取消</button><button id="save-access-button" class="primary-small">保存权限</button></footer>
+        <footer><button type="button" data-close-access>取消</button><button id="save-access-button" class="primary-small">保存权限与告警</button></footer>
       </section>
     </div>
-    <script src="/assets/app.js?v=0.7.0" defer></script>
+    <script src="/assets/app.js?v=0.7.1" defer></script>
   </body>
 </html>

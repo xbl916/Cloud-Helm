@@ -1,0 +1,49 @@
+.access-row {
+  grid-template-columns: auto minmax(0, 1fr) 94px 82px;
+}
+
+.alert-subscribe,
+.global-alert-notify {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  color: #405c67;
+}
+
+.alert-subscribe {
+  white-space: nowrap;
+}
+
+.alert-subscribe input,
+.global-alert-notify input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--cyan);
+}
+
+.global-alert-notify {
+  margin: 10px 2px 0;
+  padding: 11px 12px;
+  background: #eaf6f4;
+  border-radius: 11px;
+}
+
+.alert-subscribe:has(input:disabled) {
+  opacity: 0.45;
+}
+
+@media (max-width: 600px) {
+  .access-row {
+    grid-template-columns: auto minmax(0, 1fr) 78px;
+  }
+
+  .alert-subscribe {
+    grid-column: 2 / -1;
+    white-space: normal;
+  }
+
+  .global-alert-notify {
+    font-size: 10px;
+  }
+}

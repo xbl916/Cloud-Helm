@@ -1,7 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session
 
 from cloudhelm.alerts import (
@@ -12,7 +12,16 @@ from cloudhelm.alerts import (
 )
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
-from cloudhelm.models import AlertEvent, AlertRule, AlertStatus, Container, Node, User
+from cloudhelm.models import (
+    AccessRule,
+    AlertEvent,
+    AlertRule,
+    AlertStatus,
+    Container,
+    Node,
+    User,
+    UserRole,
+)
 from cloudhelm.schemas import HeartbeatRequest
 
 
@@ -231,19 +240,73 @@ def test_admin_can_manage_alert_rules(client, admin_headers, session_for):
 
 def test_wecom_alert_notification_records_delivery(monkeypatch):
     settings = get_settings().model_copy(
-        update={
-            "alert_notifications_enabled": True,
-            "alert_wecom_userids": "admin-wecom-id, operator-wecom-id",
-        }
+        update={"alert_notifications_enabled": True}
     )
     with SessionLocal() as db:
         rule = db.scalar(select(AlertRule).where(AlertRule.name == "节点离线"))
         assert rule is not None
+        admin = db.scalar(select(User).where(User.wecom_userid == "admin-wecom-id"))
+        assert admin is not None
+        admin.alert_notifications = True
+        node = Node(
+            agent_key="notification-node-agent",
+            name="通知节点",
+            environment="zz-notification-test",
+            agent_token_hash="hash",
+        )
+        subscriber = User(
+            username="operator-wecom-id",
+            wecom_userid="operator-wecom-id",
+            display_name="通知订阅人",
+            role=UserRole.viewer,
+            resource_restricted=True,
+        )
+        unsubscribed = User(
+            username="unsubscribed-wecom-id",
+            wecom_userid="unsubscribed-wecom-id",
+            display_name="未订阅用户",
+            role=UserRole.viewer,
+            resource_restricted=True,
+        )
+        inactive = User(
+            username="inactive-wecom-id",
+            wecom_userid="inactive-wecom-id",
+            display_name="停用订阅人",
+            role=UserRole.viewer,
+            resource_restricted=True,
+            is_active=False,
+        )
+        db.add_all([node, subscriber, unsubscribed, inactive])
+        db.flush()
+        db.add_all(
+            [
+                AccessRule(
+                    user_id=subscriber.id,
+                    scope_type="node",
+                    node_id=node.id,
+                    can_view=True,
+                    alert_notify=True,
+                ),
+                AccessRule(
+                    user_id=unsubscribed.id,
+                    scope_type="node",
+                    node_id=node.id,
+                    can_view=True,
+                ),
+                AccessRule(
+                    user_id=inactive.id,
+                    scope_type="node",
+                    node_id=node.id,
+                    can_view=True,
+                    alert_notify=True,
+                ),
+            ]
+        )
         event = AlertEvent(
             rule_id=rule.id,
             target_type="node",
-            target_id="notification-node",
-            node_id="notification-node",
+            target_id=node.id,
+            node_id=node.id,
             target_name="通知节点",
             rule_name=rule.name,
             status=AlertStatus.triggered,
@@ -294,3 +357,28 @@ def test_wecom_alert_notification_records_delivery(monkeypatch):
         assert delivered is not None
         assert delivered.notified is True
         assert delivered.notification_error is None
+        admin = db.scalar(select(User).where(User.wecom_userid == "admin-wecom-id"))
+        assert admin is not None
+        admin.alert_notifications = False
+        subscriber_ids = list(
+            db.scalars(
+                select(User.id).where(
+                    User.wecom_userid.in_(
+                        [
+                            "operator-wecom-id",
+                            "unsubscribed-wecom-id",
+                            "inactive-wecom-id",
+                        ]
+                    )
+                )
+            ).all()
+        )
+        db.execute(delete(AccessRule).where(AccessRule.user_id.in_(subscriber_ids)))
+        db.execute(delete(User).where(User.id.in_(subscriber_ids)))
+        db.delete(delivered)
+        notification_node = db.scalar(
+            select(Node).where(Node.agent_key == "notification-node-agent")
+        )
+        assert notification_node is not None
+        db.delete(notification_node)
+        db.commit()

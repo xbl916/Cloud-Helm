@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.7.0`。新增节点/容器阈值告警、触发与恢复事件、按资源权限查看和确认，以及可选的企业微信应用消息通知。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
+当前版本为 `0.7.1`。企微告警接收人改为在 H5 人员权限界面配置：全资源账号可统一订阅，受限账号可按环境、节点、项目或容器独立订阅；发送前会按当前账号状态和资源权限重新校验。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
 
 快速导航：
 
@@ -94,15 +94,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.7.0.tar.gz.sha256
-tar -xzf cloudhelm-0.7.0.tar.gz
-cd cloudhelm-0.7.0
+sha256sum -c cloudhelm-0.7.1.tar.gz.sha256
+tar -xzf cloudhelm-0.7.1.tar.gz
+cd cloudhelm-0.7.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.7.0.tar.gz: OK
+cloudhelm-0.7.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -181,7 +181,6 @@ CLOUDHELM_ALERTS_ENABLED=true
 CLOUDHELM_ALERT_EVENT_RETENTION_HOURS=2160
 CLOUDHELM_ALERT_EVENT_MAX_ROWS=10000
 CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=false
-CLOUDHELM_ALERT_WECOM_USERIDS=
 CLOUDHELM_TRUST_PROXY_HEADERS=true
 CLOUDHELM_BIND_ADDRESS=127.0.0.1
 CLOUDHELM_PORT=8080
@@ -217,8 +216,7 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_ALERTS_ENABLED`|是否评估节点与容器告警规则|默认 `true`；关闭后不产生新事件，但保留已有规则和历史事件|
 |`CLOUDHELM_ALERT_EVENT_RETENTION_HOURS`|告警事件保留时间|默认 2160 小时（90 天），可设 24–17520（两年）|
 |`CLOUDHELM_ALERT_EVENT_MAX_ROWS`|告警事件总行数硬上限|默认 10000，可设 100–1000000；每小时清理过期及超限事件|
-|`CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED`|是否通过企微自建应用发送告警消息|默认 `false`；启用前先确认应用具有目标成员可见范围|
-|`CLOUDHELM_ALERT_WECOM_USERIDS`|告警消息接收人|填写一个或多个准确企微 `UserId`，用英文逗号分隔；不支持姓名或手机号|
+|`CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED`|企微告警消息全局开关|默认 `false`；启用后仍只向 H5“用户 → 权限与告警”中明确订阅且当前有权查看资源的成员发送|
 |`CLOUDHELM_TRUST_PROXY_HEADERS`|读取代理转发的真实 IP|仅在后端只允许可信代理访问时设为 `true`|
 |`CLOUDHELM_BIND_ADDRESS`|宿主机监听地址|保持 `127.0.0.1`|
 |`CLOUDHELM_PORT`|宿主机后端端口|默认 8080，不对公网开放|
@@ -341,7 +339,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.7.0/deploy
+cd cloudhelm-0.7.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -560,7 +558,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.7.0 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.7.1 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
@@ -568,7 +566,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 ## 监控告警与企业微信通知
 
-0.7.0 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。首次启动会创建以下默认规则，管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
+0.7.1 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。首次启动会创建以下默认规则，管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
 
 |默认规则|默认阈值|连续次数|级别|
 |---|---:|---:|---|
@@ -587,14 +585,22 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 默认事件保留 90 天且全库最多 10000 行，Server 每小时按时间和行数双重清理，SQLite 和 PostgreSQL 都不会无限增长。事件量只与触发/恢复次数相关，不按每个采样点保存；若 PostgreSQL 需要更长留存，可提高 `CLOUDHELM_ALERT_EVENT_RETENTION_HOURS` 和 `CLOUDHELM_ALERT_EVENT_MAX_ROWS`，同时纳入容量与备份评估。
 
-企微消息通知默认关闭。需要启用时，在 `.env` 设置：
+企微消息通知默认关闭。先在 `.env` 只打开全局开关：
 
 ```dotenv
 CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=true
-CLOUDHELM_ALERT_WECOM_USERIDS=zhangsan,lisi
 ```
 
-接收人必须填写通讯录中的准确 `UserId`，并处于该云舵自建应用的可见范围内。消息使用现有 `CLOUDHELM_WECOM_AGENT_ID` 和 `CLOUDHELM_WECOM_SECRET` 调用企微应用消息接口，不需要新增 Secret。通知失败只记录在事件中并在页面显示，不会让 Agent 心跳失败；修复企微配置后，新事件会继续尝试发送，当前版本不会自动重发旧事件。若只需要页面告警，保持通知开关为 `false` 且接收人为空即可。
+然后由全局管理员进入 H5“我的 → 用户”，点击成员旁的“权限与告警”：
+
+- 全部资源账号（包括全局管理员）勾选“接收全部可见资源的企微告警通知”；
+- 自定义资源账号在每条环境、节点、Compose 项目或容器授权旁勾选“企微告警”；
+- 资源管理员也可在自身管理范围内给其他普通成员调整订阅，不能扩大对方的可见范围；
+- 告警规则自身的“通知”开关、全局环境变量和成员资源订阅必须同时启用，才会发送消息。
+
+接收身份直接使用该云舵用户已经绑定的企微 `UserId`，无需在 `.env` 重复填写。每次发送前，Server 都会重新查询数据库：账号必须启用、订阅仍存在，而且对告警资源仍有查看权；同一成员匹配多条授权时只发送一次。删除授权、取消订阅或停用账号后不会再收到后续消息。项目/容器订阅只接收对应容器告警，不会收到该节点的主机级告警；环境/节点订阅可接收该范围内的节点及容器告警。
+
+目标成员还必须处于企微自建应用的可见范围内。消息使用现有 `CLOUDHELM_WECOM_AGENT_ID` 和 `CLOUDHELM_WECOM_SECRET` 调用企微应用消息接口，不需要新增 Secret。通知失败只记录在事件中并在页面显示，不会让 Agent 心跳失败；修复企微配置后，新事件会继续尝试发送，当前版本不会自动重发旧事件。若只需要页面告警，保持全局通知开关为 `false` 即可，界面中的订阅配置会保留但不会发送。
 
 ## 人员与容器权限
 
@@ -607,11 +613,11 @@ CLOUDHELM_ALERT_WECOM_USERIDS=zhangsan,lisi
 
 添加用户时填写其准确的企业微信 `UserId`，并直接选择“全部资源”或“自定义资源范围”。自定义模式创建账号后会自动进入资源绑定页；未勾选任何规则时，该用户登录后看不到任何节点。
 
-全局管理员可以在创建流程或用户列表的“配置范围”中，按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”“查看 + 日志 + 运维”或“资源管理员”。“资源管理员”只能授予运维角色；节点管理员自动管理该节点下的项目和容器，容器管理员只管理该容器。全局管理员角色始终拥有全部资源。
+全局管理员可以在创建流程或用户列表的“权限与告警”中，按环境、节点、Compose 项目或单个容器授予“仅查看”“查看 + 日志”“查看 + 日志 + 运维”或“资源管理员”，并在同一条授权上决定是否接收企微告警。“资源管理员”只能授予运维角色；节点管理员自动管理该节点下的项目和容器，容器管理员只管理该容器。全局管理员角色始终拥有全部资源，但是否接收告警仍需显式开启。
 
 资源管理员可以给已经存在的普通成员配置授权，但服务端只允许其修改自身管理范围内的规则：不能创建、停用、下线或修改账号，不能修改自己或全局管理员，不能授予“全部资源”，也不能通过节点级规则扩大一个容器管理员的范围。目标成员在其他设备上的既有规则会原样保留。页面禁用和隐藏只用于提示，所有边界均由服务端再次校验，不能通过直接构造 API 或输入容器 ID 绕过。
 
-保存权限时，H5 和小程序会先调用服务端预览接口，显示新增、移除、级别调整和新增管理权的数量，再要求二次确认。读取配置时返回的 `version` 会作为 `expected_version` 随保存请求提交；若另一位管理员已在此期间修改同一成员，服务端返回 `409` 并拒绝覆盖，刷新后才能重新确认。管理员可通过有效权限接口查看某成员在节点/容器上的最终权限及来源，也可反查某个节点或容器当前由哪些全局或资源管理员管理。
+保存权限与告警订阅时，H5 会先调用服务端预览接口，显示新增、移除、级别、管理权和告警订阅的调整数量，再要求二次确认。读取配置时返回的 `version` 会作为 `expected_version` 随保存请求提交；若另一位管理员已在此期间修改同一成员，服务端返回 `409` 并拒绝覆盖，刷新后才能重新确认。所有修改都会进入审计日志。管理员可通过有效权限接口查看某成员在节点/容器上的最终权限及来源，也可反查某个节点或容器当前由哪些全局或资源管理员管理。
 
 全局管理员还可以：
 
@@ -756,11 +762,11 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.5.2–0.6.4 原地升级到 0.7.0
+## 从 0.5.2–0.7.0 原地升级到 0.7.1
 
-从 0.6.4 升级时，0.7.0 只会新增 `alert_rules`、`alert_states` 和 `alert_events` 三张告警表并写入 `0005_alerting` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号和 `metric_samples` 有界历史表。迁移不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
+从 0.7.0 升级时，0.7.1 只会给 `users` 增加 `alert_notifications`、给 `access_rules` 增加 `alert_notify` 两个默认关闭的布尔列，并写入 `0006_alert_subscriptions` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表和告警表。迁移不会重建已有表，也不会修改已有用户、企微身份、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
 
-SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.7.0.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加变量也能启动：页面告警默认启用，企微消息通知默认关闭，事件默认保留 90 天且最多 10000 行。
+SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.7.1.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加变量也能启动；如果从 0.7.0 继承了 `CLOUDHELM_ALERT_WECOM_USERIDS`，0.7.1 会安全忽略它，建议删除以免误以为仍由该变量控制收件人。升级后所有人员订阅默认关闭，管理员必须在“用户 → 权限与告警”中显式开启。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -784,7 +790,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-从 0.6.4 升级时不强制升级 Agent：0.7.0 告警直接使用现有心跳字段，0.6.4 Agent 与 0.7.0 Server 兼容。为了镜像版本统一可以把 Agent 镜像更新为 0.7.0，但无需修改 `agent.env`、重新注册或删除状态目录。
+本次功能只涉及 Server、数据库和 H5，不强制升级 Agent：0.6.4 或 0.7.0 Agent 均与 0.7.1 Server 兼容。为了镜像版本统一可以把 Agent 镜像更新为 0.7.1，但无需修改 `agent.env`、重新注册或删除状态目录；从 0.7.0 升级也无需修改 Agent Compose。
 
 如果从 0.5.2、0.6.0 等尚未采用宿主机网络视图的版本升级，每台 Agent 节点必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -902,7 +908,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.7.0
+bash scripts/package-release.sh 0.7.1
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -910,11 +916,11 @@ bash scripts/package-release.sh 0.7.0
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.7.0
-git push origin v0.7.0
+git tag v0.7.1
+git push origin v0.7.1
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.7.0`
-- `ghcr.io/xbl916/cloud-helm-agent:0.7.0`
+- `ghcr.io/xbl916/cloud-helm-server:0.7.1`
+- `ghcr.io/xbl916/cloud-helm-agent:0.7.1`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.7.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.7.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

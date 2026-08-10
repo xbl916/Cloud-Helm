@@ -114,6 +114,27 @@ def can_view_node_metrics(user: User, rules: list[AccessRule], node: Node) -> bo
     )
 
 
+def can_receive_alert(
+    user: User,
+    rules: list[AccessRule],
+    node: Node,
+    container: Container | None = None,
+) -> bool:
+    """Require both current visibility and an explicit matching subscription."""
+    if not user.is_active:
+        return False
+    if user.role == UserRole.admin or not user.resource_restricted:
+        return user.alert_notifications and can_access(
+            user, rules, node, container, "view"
+        )
+    return any(
+        rule.alert_notify
+        and _permission_granted(rule, "view")
+        and _rule_matches(rule, node, container)
+        for rule in rules
+    )
+
+
 def visible_inventory(
     db: Session, user: User
 ) -> tuple[list[Node], list[Container], list[AccessRule]]:

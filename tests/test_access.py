@@ -1,4 +1,4 @@
-from cloudhelm.access import can_access, can_view_node_metrics
+from cloudhelm.access import can_access, can_receive_alert, can_view_node_metrics
 from cloudhelm.models import AccessRule, Container, Node, User, UserRole
 
 
@@ -125,3 +125,48 @@ def test_unrestricted_operator_does_not_implicitly_manage_resources():
     )
     assert can_access(operator, [], node, container, "operate")
     assert not can_access(operator, [], node, container, "manage")
+
+
+def test_alert_subscription_requires_current_matching_access():
+    node, container = inventory()
+    subscriber = User(
+        id="alert-subscriber",
+        username="alert-subscriber",
+        wecom_userid="alert-subscriber",
+        display_name="Alert Subscriber",
+        role=UserRole.viewer,
+        resource_restricted=True,
+        is_active=True,
+    )
+    project_rule = AccessRule(
+        user_id=subscriber.id,
+        scope_type="project",
+        node_id=node.id,
+        project="web",
+        can_view=True,
+        alert_notify=True,
+    )
+    assert can_receive_alert(subscriber, [project_rule], node, container)
+    assert not can_receive_alert(subscriber, [project_rule], node)
+    project_rule.alert_notify = False
+    assert not can_receive_alert(subscriber, [project_rule], node, container)
+    project_rule.alert_notify = True
+    subscriber.is_active = False
+    assert not can_receive_alert(subscriber, [project_rule], node, container)
+
+
+def test_unrestricted_alert_subscription_uses_global_switch():
+    node, container = inventory()
+    subscriber = User(
+        id="global-alert-subscriber",
+        username="global-alert-subscriber",
+        wecom_userid="global-alert-subscriber",
+        display_name="Global Alert Subscriber",
+        role=UserRole.viewer,
+        resource_restricted=False,
+        alert_notifications=True,
+        is_active=True,
+    )
+    assert can_receive_alert(subscriber, [], node, container)
+    subscriber.alert_notifications = False
+    assert not can_receive_alert(subscriber, [], node, container)

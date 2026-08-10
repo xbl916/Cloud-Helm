@@ -77,10 +77,12 @@ class AccessRuleInput(BaseModel):
     can_logs: bool = False
     can_operate: bool = False
     can_manage: bool = False
+    alert_notify: bool = False
 
 
 class AccessConfigInput(BaseModel):
     restricted: bool
+    global_alert_notify: bool = False
     rules: list[AccessRuleInput] = Field(default_factory=list, max_length=500)
     expected_version: int | None = Field(default=None, ge=1)
 

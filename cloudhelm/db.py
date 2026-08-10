@@ -103,6 +103,17 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
             {"users": {"access_version": "INTEGER NOT NULL DEFAULT 1"}},
         ),
         ("0005_alerting", {}),
+        (
+            "0006_alert_subscriptions",
+            {
+                "users": {
+                    "alert_notifications": "BOOLEAN NOT NULL DEFAULT FALSE"
+                },
+                "access_rules": {
+                    "alert_notify": "BOOLEAN NOT NULL DEFAULT FALSE"
+                },
+            },
+        ),
     ]
 
 

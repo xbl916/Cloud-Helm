@@ -6,14 +6,17 @@ from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from cloudhelm.access import can_receive_alert
 from cloudhelm.config import Settings
 from cloudhelm.models import (
+    AccessRule,
     AlertEvent,
     AlertRule,
     AlertState,
     AlertStatus,
     Container,
     Node,
+    User,
 )
 from cloudhelm.schemas import HeartbeatRequest
 
@@ -286,8 +289,37 @@ def evaluate_offline_alerts(
     return notifications
 
 
+def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
+    node = db.get(Node, event.node_id)
+    if not node:
+        return []
+    container = (
+        db.get(Container, event.target_id)
+        if event.target_type == "container"
+        else None
+    )
+    if event.target_type == "container" and not container:
+        return []
+    users = list(db.scalars(select(User).where(User.is_active.is_(True))).all())
+    rules_by_user: dict[str, list[AccessRule]] = {}
+    for rule in db.scalars(select(AccessRule)).all():
+        rules_by_user.setdefault(rule.user_id, []).append(rule)
+    return sorted(
+        {
+            user.wecom_userid
+            for user in users
+            if can_receive_alert(
+                user,
+                rules_by_user.get(user.id, []),
+                node,
+                container,
+            )
+        }
+    )
+
+
 async def send_alert_notification(event_id: str, settings: Settings) -> None:
-    if not settings.alert_notifications_enabled or not settings.alert_recipients:
+    if not settings.alert_notifications_enabled:
         return
     from cloudhelm.db import SessionLocal
     from cloudhelm.routers.auth import _get_access_token
@@ -295,6 +327,9 @@ async def send_alert_notification(event_id: str, settings: Settings) -> None:
     with SessionLocal() as db:
         event = db.get(AlertEvent, event_id)
         if not event or event.notified:
+            return
+        recipients = alert_recipient_userids(db, event)
+        if not recipients:
             return
         try:
             token = await _get_access_token(settings)
@@ -306,7 +341,7 @@ async def send_alert_notification(event_id: str, settings: Settings) -> None:
                     f"{settings.wecom_api_base}/cgi-bin/message/send",
                     params={"access_token": token},
                     json={
-                        "touser": "|".join(settings.alert_recipients),
+                        "touser": "|".join(recipients),
                         "msgtype": "text",
                         "agentid": int(settings.wecom_agent_id),
                         "text": {"content": content},

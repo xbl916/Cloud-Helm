@@ -20,6 +20,43 @@ def _create_user(
     return response.json()
 
 
+def test_global_admin_can_configure_own_alert_subscription(
+    client: TestClient, admin_headers: dict[str, str]
+):
+    users = client.get("/api/v1/users", headers=admin_headers)
+    assert users.status_code == 200
+    admin = next(item for item in users.json() if item["role"] == "admin")
+    assert admin["can_edit_access"] is True
+    current = client.get(
+        f"/api/v1/users/{admin['id']}/access", headers=admin_headers
+    )
+    assert current.status_code == 200
+    enabled = client.put(
+        f"/api/v1/users/{admin['id']}/access",
+        headers=admin_headers,
+        json={
+            "restricted": False,
+            "global_alert_notify": True,
+            "rules": [],
+            "expected_version": current.json()["version"],
+        },
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["global_alert_notify"] is True
+    disabled = client.put(
+        f"/api/v1/users/{admin['id']}/access",
+        headers=admin_headers,
+        json={
+            "restricted": False,
+            "global_alert_notify": False,
+            "rules": [],
+            "expected_version": enabled.json()["version"],
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["global_alert_notify"] is False
+
+
 def test_scoped_manager_can_delegate_only_inside_own_container(
     client: TestClient, admin_headers: dict[str, str], session_for
 ):
@@ -293,6 +330,7 @@ def test_access_preview_lock_effective_managers_and_emergency_revoke(
                 "node_id": node_id,
                 "container_id": container_id,
                 "can_manage": True,
+                "alert_notify": True,
             }
         ],
     }
@@ -307,6 +345,7 @@ def test_access_preview_lock_effective_managers_and_emergency_revoke(
         "removed": 0,
         "changed": 0,
         "management_elevations": 1,
+        "notification_changes": 1,
     }
     saved = client.put(
         f"/api/v1/users/{target['id']}/access",
@@ -315,6 +354,11 @@ def test_access_preview_lock_effective_managers_and_emergency_revoke(
     )
     assert saved.status_code == 200
     assert saved.json()["version"] == initial["version"] + 1
+    configured = client.get(
+        f"/api/v1/users/{target['id']}/access", headers=manager_headers
+    )
+    assert configured.status_code == 200
+    assert configured.json()["rules"][0]["alert_notify"] is True
     stale = client.put(
         f"/api/v1/users/{target['id']}/access",
         headers=manager_headers,

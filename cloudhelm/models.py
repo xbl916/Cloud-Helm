@@ -57,6 +57,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     resource_restricted: Mapped[bool] = mapped_column(Boolean, default=True)
+    alert_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
     access_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
@@ -380,6 +381,7 @@ class AccessRule(Base):
     can_logs: Mapped[bool] = mapped_column(Boolean, default=False)
     can_operate: Mapped[bool] = mapped_column(Boolean, default=False)
     can_manage: Mapped[bool] = mapped_column(Boolean, default=False)
+    alert_notify: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
