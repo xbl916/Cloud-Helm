@@ -234,6 +234,13 @@ def test_agent_inventory_and_task_flow(
     assert completed.status_code == 200
     assert completed.json()["status"] == "success"
     assert "service ready" in completed.json()["result"]
+    audit = client.get("/api/v1/audit?limit=20", headers=admin_headers)
+    log_result_audit = next(
+        item for item in audit.json() if item["action"] == "task.logs.result"
+    )
+    assert log_result_audit["action_label"] == "查看容器日志执行结果"
+    assert log_result_audit["detail_label"] == "执行完成"
+    assert "service ready" not in log_result_audit["detail"]
 
     assert (
         client.get("/api/v1/agent/tasks/next", headers=agent_headers).status_code == 204
@@ -367,10 +374,13 @@ def test_health_and_frontend(client: TestClient):
     assert "data-alert-notify" in script.text
     assert "node_gpu_temperature_c" in script.text
     assert "/gpu-baseline/reset" in script.text
+    assert "/notification/test" in script.text
+    assert "action_label" in script.text
 
     access_alert_style = client.get("/assets/access-alerts.css")
     assert access_alert_style.status_code == 200
     assert ".alert-subscribe" in access_alert_style.text
+    assert ".alert-rule-actions" in access_alert_style.text
 
     style = client.get("/assets/app.css")
     assert style.status_code == 200

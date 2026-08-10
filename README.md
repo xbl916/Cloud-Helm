@@ -2,7 +2,7 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.8.0`。告警范围扩展到 GPU 利用率/显存/温度/掉卡、动态网络流量突增、容器磁盘增长、异常退出、按 CPU 核数归一化的宿主机负载、Swap 和指标采集失效；GPU 基线可由管理员审计式重设。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
+当前版本为 `0.8.1`。审计页面以中文显示操作、对象、结果和常见详情；管理员可对任意已启用且开启通知的告警规则发送模拟告警，模拟消息复用真实的资源范围、人员订阅、权限校验和企业微信应用消息链路，但不会创建真实故障事件或改变告警状态。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
 
 快速导航：
 
@@ -94,15 +94,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.8.0.tar.gz.sha256
-tar -xzf cloudhelm-0.8.0.tar.gz
-cd cloudhelm-0.8.0
+sha256sum -c cloudhelm-0.8.1.tar.gz.sha256
+tar -xzf cloudhelm-0.8.1.tar.gz
+cd cloudhelm-0.8.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.8.0.tar.gz: OK
+cloudhelm-0.8.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -339,7 +339,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.8.0/deploy
+cd cloudhelm-0.8.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -566,7 +566,7 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 
 ## 监控告警与企业微信通知
 
-0.8.0 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。升级会按指标补充缺少的新规则，不覆盖已有同指标规则的阈值和开关；自 0.8.0 起还会记录默认规则播种状态，之后主动删除的规则不会在重启时恢复。管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
+0.8.1 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。升级会按指标补充缺少的新规则，不覆盖已有同指标规则的阈值和开关；自 0.8.0 起还会记录默认规则播种状态，之后主动删除的规则不会在重启时恢复。管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
 
 |默认规则|默认阈值|连续次数|级别|默认启用|
 |---|---:|---:|---|---:|
@@ -615,6 +615,10 @@ CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=true
 接收身份直接使用该云舵用户已经绑定的企微 `UserId`，无需在 `.env` 重复填写。每次发送前，Server 都会重新查询数据库：账号必须启用、订阅仍存在，而且对告警资源仍有查看权；同一成员匹配多条授权时只发送一次。删除授权、取消订阅或停用账号后不会再收到后续消息。项目/容器订阅只接收对应容器告警，不会收到该节点的主机级告警；环境/节点订阅可接收该范围内的节点及容器告警。
 
 目标成员还必须处于企微自建应用的可见范围内。消息使用现有 `CLOUDHELM_WECOM_AGENT_ID` 和 `CLOUDHELM_WECOM_SECRET` 调用企微应用消息接口，不需要新增 Secret。通知失败只记录在事件中并在页面显示，不会让 Agent 心跳失败；修复企微配置后，新事件会继续尝试发送，当前版本不会自动重发旧事件。若只需要页面告警，保持全局通知开关为 `false` 即可，界面中的订阅配置会保留但不会发送。
+
+全局管理员可在每条告警规则右侧点击“模拟”。Server 会要求全局企微通知、规则启用状态和规则通知开关都已开启，再从规则范围中选取一个匹配节点或容器，并使用与真实告警相同的权限和订阅逻辑计算全部接收人。模拟消息会显示规则、模拟资源和操作人，并明确注明“不代表真实故障”；它不会写入 `alert_events`、不会改变连续次数或活动状态，但发送结果和接收人数会进入操作审计。同一管理员对同一规则每 30 秒最多模拟一次；没有匹配资源或没有符合条件的订阅人时不会发送。
+
+操作审计在数据库中继续保存稳定的动作代码，便于程序检索和升级兼容；H5、小程序和审计 API 同时返回中文操作、对象与常见详情。镜像名、容器 ID、企微 UserId 以及外部系统原始错误等技术值会保留原文，避免翻译后失真。
 
 ## 人员与容器权限
 
@@ -776,11 +780,11 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.5.2–0.7.1 原地升级到 0.8.0
+## 从 0.5.2–0.8.0 原地升级到 0.8.1
 
-从 0.7.1 升级时，0.8.0 会给节点增加 GPU 数量基线和网络动态基线字段，给容器增加可写层增长速率字段，创建 `alert_rule_seeds` 默认规则播种记录表，并写入 `0007_extended_alert_metrics` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表、告警表和按资源告警订阅字段。迁移不会重建已有表，也不会修改已有用户、企微身份、既有告警订阅、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
+从 0.8.0 升级到 0.8.1 没有数据库结构变更，不会修改既有规则、事件、订阅或审计原始记录。从 0.7.1 及更早版本直接升级时，仍会给节点增加 GPU 数量基线和网络动态基线字段，给容器增加可写层增长速率字段，创建 `alert_rule_seeds` 默认规则播种记录表，并写入 `0007_extended_alert_metrics` 迁移记录；更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表、告警表和按资源告警订阅字段。迁移不会重建已有表，也不会修改已有用户、企微身份、既有告警订阅、Agent 节点凭据、历史指标或审计记录。
 
-SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.8.0.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不需要增加变量；如果更早版本遗留了 `CLOUDHELM_ALERT_WECOM_USERIDS`，0.8.0 会安全忽略它，建议删除。0.7.1 已配置的人员告警订阅会原样保留，新补充规则是否通知仍受各规则开关、全局通知开关和人员订阅三层控制。
+SQLite 始终在启动时运行 `PRAGMA integrity_check`。只有检测到待执行结构迁移时，才会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.8.1.bak` 一致性备份并在完成后再次检查；从 0.8.0 升级因无结构迁移不会自动生成新备份，仍建议执行下面的停机备份。现有 `.env` 不需要增加变量；既有人员告警订阅会原样保留。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -804,7 +808,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-0.8.0 Server 可以接收旧 Agent 心跳，但“按 CPU 核数归一化的宿主机负载”和“按真实磁盘查询间隔计算的容器可写层增长”需要 0.8.0 Agent 新字段，因此建议所有节点同步升级 Agent。升级只需更新镜像/复制新版 `agent.compose.yml`，无需修改 `agent.env`、重新注册、删除状态目录或改动 GPU overlay；保留 `deploy/cloudhelm-data` 即可沿用节点独立凭据。GPU、网络、退出码等基于既有字段的告警在 Agent 尚未升级时仍可工作。
+0.8.1 的中文审计和模拟告警只涉及 Server/H5，小程序审计页面也会直接使用 Server 返回的中文字段；0.8.0 Agent 与 0.8.1 Server 完全兼容，不强制升级 Agent。若 Agent 仍早于 0.8.0，“按 CPU 核数归一化的宿主机负载”和“按真实磁盘查询间隔计算的容器可写层增长”仍需要升级到 0.8.1 Agent。升级 Agent 不需要修改 `agent.env`、重新注册、删除状态目录或改动 GPU overlay。
 
 如果从 0.5.2、0.6.0 等尚未采用宿主机网络视图的版本升级，每台 Agent 节点必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -922,7 +926,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.8.0
+bash scripts/package-release.sh 0.8.1
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -930,11 +934,11 @@ bash scripts/package-release.sh 0.8.0
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.8.0
-git push origin v0.8.0
+git tag v0.8.1
+git push origin v0.8.1
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.8.0`
-- `ghcr.io/xbl916/cloud-helm-agent:0.8.0`
+- `ghcr.io/xbl916/cloud-helm-server:0.8.1`
+- `ghcr.io/xbl916/cloud-helm-agent:0.8.1`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.8.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.8.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

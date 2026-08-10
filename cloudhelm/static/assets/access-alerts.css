@@ -16,6 +16,18 @@
   gap: 8px;
 }
 
+.alert-rule-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.alert-rule-actions button {
+  flex: 1 1 auto;
+}
+
 .gpu-baseline-button {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -59,5 +71,9 @@
 
   .global-alert-notify {
     font-size: 10px;
+  }
+
+  .alert-rule-actions {
+    grid-column: 1 / -1;
   }
 }

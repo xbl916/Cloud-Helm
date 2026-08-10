@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import delete, select, update
 
@@ -11,7 +12,13 @@ from cloudhelm.access import (
     load_access_rules,
     visible_inventory,
 )
-from cloudhelm.audit import add_audit
+from cloudhelm.alerts import alert_test_delivery, send_wecom_text
+from cloudhelm.audit import (
+    add_audit,
+    audit_action_label,
+    audit_detail_label,
+    audit_target_label,
+)
 from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
 from cloudhelm.image_reference import validate_tag_change
 from cloudhelm.models import (
@@ -550,11 +557,15 @@ def list_audit(
         {
             "id": item.id,
             "username": item.username,
+            "username_label": "系统" if item.username == "system" else item.username,
             "action": item.action,
+            "action_label": audit_action_label(item.action),
             "target_type": item.target_type,
+            "target_type_label": audit_target_label(item.target_type),
             "target_name": item.target_name,
             "success": item.success,
             "detail": item.detail,
+            "detail_label": audit_detail_label(item.action, item.detail),
             "ip_address": item.ip_address,
             "created_at": _iso(item.created_at),
         }
@@ -615,6 +626,115 @@ def list_alert_rules(db: Db, admin: Admin) -> list[dict]:
         _alert_rule_out(rule)
         for rule in db.scalars(select(AlertRule).order_by(AlertRule.name)).all()
     ]
+
+
+@router.post("/alerts/rules/{rule_id}/notification/test")
+async def test_alert_notification(
+    rule_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> dict:
+    rule = db.get(AlertRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="告警规则不存在")
+    now = datetime.now(UTC)
+
+    def record(success: bool, detail: str) -> None:
+        add_audit(
+            db,
+            action="alert.notification.test",
+            target_type="alert_rule",
+            target_id=rule.id,
+            target_name=rule.name,
+            user=admin,
+            success=success,
+            detail=detail,
+            request=request,
+            settings=settings,
+        )
+        db.commit()
+
+    recent = db.scalar(
+        select(AuditLog.id)
+        .where(
+            AuditLog.action == "alert.notification.test",
+            AuditLog.user_id == admin.id,
+            AuditLog.target_id == rule.id,
+            AuditLog.success.is_(True),
+            AuditLog.created_at >= now - timedelta(seconds=30),
+        )
+        .limit(1)
+    )
+    if recent:
+        raise HTTPException(
+            status_code=429, detail="同一规则的模拟告警每 30 秒最多发送一次"
+        )
+    if not rule.enabled:
+        record(False, "发送失败：告警规则未启用")
+        raise HTTPException(status_code=409, detail="请先启用这条告警规则")
+    if not rule.notify:
+        record(False, "发送失败：告警规则的通知开关未启用")
+        raise HTTPException(status_code=409, detail="请先开启这条规则的通知开关")
+    if not settings.alert_notifications_enabled:
+        record(False, "发送失败：全局企微告警通知未启用")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "请先在 .env 设置 "
+                "CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=true 并重建 Server"
+            ),
+        )
+    delivery = alert_test_delivery(db, rule)
+    if not delivery:
+        record(False, "发送失败：规则范围内没有可用于模拟的资源")
+        raise HTTPException(
+            status_code=409, detail="这条规则的范围内没有可用于模拟的资源"
+        )
+    node, container, recipients = delivery
+    target_name = f"{node.name}/{container.name}" if container else node.name
+    if not recipients:
+        record(False, f"发送失败：模拟资源 {target_name} 没有符合条件的订阅人")
+        raise HTTPException(
+            status_code=409,
+            detail="没有成员订阅该模拟资源，或订阅成员已停用/失去查看权限",
+        )
+    recipient_users = list(
+        db.scalars(select(User).where(User.wecom_userid.in_(recipients))).all()
+    )
+    names_by_userid = {
+        user.wecom_userid: user.display_name for user in recipient_users
+    }
+    recipient_names = [names_by_userid.get(userid, userid) for userid in recipients]
+    content = (
+        "【云舵模拟告警】\n"
+        "这是一条由管理员主动发送的通知链路测试，不代表真实故障。\n"
+        f"规则：{rule.name}\n"
+        f"模拟资源：{target_name}\n"
+        f"操作人：{admin.display_name}\n"
+        f"时间：{now.isoformat()}"
+    )
+    try:
+        await send_wecom_text(recipients, content, settings)
+    except (httpx.HTTPError, HTTPException, RuntimeError, ValueError) as exc:
+        error = str(exc)[:400]
+        record(False, f"发送失败：{error}")
+        raise HTTPException(
+            status_code=502, detail=f"模拟告警发送失败：{error}"
+        ) from exc
+    record(
+        True,
+        f"模拟资源={target_name}，接收人数={len(recipients)}，接收人={'、'.join(recipient_names)}",
+    )
+    return {
+        "rule_id": rule.id,
+        "rule_name": rule.name,
+        "target_name": target_name,
+        "recipient_count": len(recipients),
+        "recipient_names": recipient_names,
+        "message": "模拟告警已通过企业微信应用消息发送",
+    }
 
 
 @router.post("/alerts/rules", status_code=status.HTTP_201_CREATED)

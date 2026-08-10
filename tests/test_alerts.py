@@ -19,6 +19,7 @@ from cloudhelm.models import (
     AlertEvent,
     AlertRule,
     AlertStatus,
+    AuditLog,
     Container,
     Node,
     User,
@@ -605,4 +606,113 @@ def test_wecom_alert_notification_records_delivery(monkeypatch):
         )
         assert notification_node is not None
         db.delete(notification_node)
+        db.commit()
+
+
+def test_admin_test_alert_uses_real_resource_subscriptions(
+    client, admin_headers, monkeypatch
+):
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.wecom_userid == "admin-wecom-id"))
+        assert admin is not None
+        admin.alert_notifications = True
+        node = Node(
+            agent_key="simulated-alert-node-agent",
+            name="模拟告警节点",
+            environment="simulation",
+            agent_token_hash="hash",
+        )
+        subscriber = User(
+            username="simulation-recipient",
+            wecom_userid="simulation-recipient",
+            display_name="模拟接收人",
+            role=UserRole.viewer,
+            resource_restricted=True,
+        )
+        db.add_all([node, subscriber])
+        db.flush()
+        rule = AlertRule(
+            name="模拟节点内存告警",
+            scope_type="node",
+            node_id=node.id,
+            metric="node_memory_percent",
+            threshold=90,
+            enabled=True,
+            notify=True,
+        )
+        db.add_all(
+            [
+                rule,
+                AccessRule(
+                    user_id=subscriber.id,
+                    scope_type="node",
+                    node_id=node.id,
+                    can_view=True,
+                    alert_notify=True,
+                ),
+            ]
+        )
+        db.commit()
+        rule_id = rule.id
+
+    sent = {}
+
+    async def fake_send(recipients, content, settings):
+        sent.update(
+            recipients=recipients,
+            content=content,
+            enabled=settings.alert_notifications_enabled,
+        )
+
+    settings = get_settings().model_copy(
+        update={"alert_notifications_enabled": True}
+    )
+    monkeypatch.setattr("cloudhelm.routers.api.send_wecom_text", fake_send)
+    client.app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        response = client.post(
+            f"/api/v1/alerts/rules/{rule_id}/notification/test",
+            headers=admin_headers,
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 200
+    assert response.json()["recipient_count"] == 2
+    assert response.json()["target_name"] == "模拟告警节点"
+    assert sent["recipients"] == ["admin-wecom-id", "simulation-recipient"]
+    assert sent["enabled"] is True
+    assert "规则：模拟节点内存告警" in sent["content"]
+    assert "不代表真实故障" in sent["content"]
+
+    audit = client.get("/api/v1/audit?limit=20", headers=admin_headers)
+    assert audit.status_code == 200
+    item = next(
+        row
+        for row in audit.json()
+        if row["action"] == "alert.notification.test"
+    )
+    assert item["action_label"] == "发送模拟告警"
+    assert item["target_type_label"] == "告警规则"
+    assert "接收人数=2" in item["detail_label"]
+
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.wecom_userid == "admin-wecom-id"))
+        assert admin is not None
+        admin.alert_notifications = False
+        subscriber = db.scalar(
+            select(User).where(User.wecom_userid == "simulation-recipient")
+        )
+        assert subscriber is not None
+        db.execute(delete(AccessRule).where(AccessRule.user_id == subscriber.id))
+        db.execute(
+            delete(AuditLog).where(
+                AuditLog.action == "alert.notification.test"
+            )
+        )
+        db.execute(delete(AlertRule).where(AlertRule.id == rule_id))
+        db.execute(
+            delete(Node).where(Node.agent_key == "simulated-alert-node-agent")
+        )
+        db.delete(subscriber)
         db.commit()

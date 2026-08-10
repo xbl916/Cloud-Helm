@@ -410,21 +410,22 @@ def evaluate_offline_alerts(
     return notifications
 
 
-def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
-    node = db.get(Node, event.node_id)
-    if not node:
-        return []
-    container = (
-        db.get(Container, event.target_id)
-        if event.target_type == "container"
-        else None
-    )
-    if event.target_type == "container" and not container:
-        return []
+def _alert_recipient_context(
+    db: Session,
+) -> tuple[list[User], dict[str, list[AccessRule]]]:
     users = list(db.scalars(select(User).where(User.is_active.is_(True))).all())
     rules_by_user: dict[str, list[AccessRule]] = {}
     for rule in db.scalars(select(AccessRule)).all():
         rules_by_user.setdefault(rule.user_id, []).append(rule)
+    return users, rules_by_user
+
+
+def _alert_recipient_userids(
+    users: list[User],
+    rules_by_user: dict[str, list[AccessRule]],
+    node: Node,
+    container: Container | None = None,
+) -> list[str]:
     return sorted(
         {
             user.wecom_userid
@@ -439,11 +440,71 @@ def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
     )
 
 
+def alert_recipient_userids_for_target(
+    db: Session, node: Node, container: Container | None = None
+) -> list[str]:
+    users, rules_by_user = _alert_recipient_context(db)
+    return _alert_recipient_userids(users, rules_by_user, node, container)
+
+
+def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
+    node = db.get(Node, event.node_id)
+    if not node:
+        return []
+    container = (
+        db.get(Container, event.target_id)
+        if event.target_type == "container"
+        else None
+    )
+    if event.target_type == "container" and not container:
+        return []
+    return alert_recipient_userids_for_target(db, node, container)
+
+
+def alert_test_targets(
+    db: Session, rule: AlertRule
+) -> list[tuple[Node, Container | None]]:
+    nodes = list(db.scalars(select(Node).order_by(Node.name)).all())
+    if rule.metric.startswith("container_"):
+        containers = list(
+            db.scalars(
+                select(Container)
+                .where(Container.present.is_(True))
+                .order_by(Container.name)
+            ).all()
+        )
+        nodes_by_id = {node.id: node for node in nodes}
+        matches = []
+        for container in containers:
+            node = nodes_by_id.get(container.node_id)
+            if node and _scope_matches(rule, node, container):
+                matches.append((node, container))
+        return matches
+    return [(node, None) for node in nodes if _scope_matches(rule, node)]
+
+
+def alert_test_delivery(
+    db: Session, rule: AlertRule
+) -> tuple[Node, Container | None, list[str]] | None:
+    targets = alert_test_targets(db, rule)
+    if not targets:
+        return None
+    users, rules_by_user = _alert_recipient_context(db)
+    deliveries = [
+        (
+            node,
+            container,
+            _alert_recipient_userids(users, rules_by_user, node, container),
+        )
+        for node, container in targets
+    ]
+    return max(deliveries, key=lambda item: len(item[2]))
+
+
 async def send_alert_notification(event_id: str, settings: Settings) -> None:
     if not settings.alert_notifications_enabled:
         return
     from cloudhelm.db import SessionLocal
-    from cloudhelm.routers.auth import _get_access_token
 
     with SessionLocal() as db:
         event = db.get(AlertEvent, event_id)
@@ -453,28 +514,39 @@ async def send_alert_notification(event_id: str, settings: Settings) -> None:
         if not recipients:
             return
         try:
-            token = await _get_access_token(settings)
             content = f"【云舵告警】\n{event.message}\n时间：{event.created_at.isoformat()}"
-            async with httpx.AsyncClient(
-                timeout=settings.wecom_api_timeout_seconds
-            ) as client:
-                response = await client.post(
-                    f"{settings.wecom_api_base}/cgi-bin/message/send",
-                    params={"access_token": token},
-                    json={
-                        "touser": "|".join(recipients),
-                        "msgtype": "text",
-                        "agentid": int(settings.wecom_agent_id),
-                        "text": {"content": content},
-                        "safe": 0,
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-            if payload.get("errcode") != 0:
-                raise RuntimeError(json.dumps(payload, ensure_ascii=False)[:400])
+            await send_wecom_text(recipients, content, settings)
             event.notified = True
             event.notification_error = None
         except (httpx.HTTPError, HTTPException, RuntimeError, ValueError) as exc:
             event.notification_error = str(exc)[:500]
         db.commit()
+
+
+async def send_wecom_text(
+    recipients: list[str], content: str, settings: Settings
+) -> None:
+    """Send one application text message through the configured WeCom app."""
+    from cloudhelm.routers.auth import _get_access_token
+
+    if not recipients:
+        raise ValueError("企微消息接收人不能为空")
+    token = await _get_access_token(settings)
+    async with httpx.AsyncClient(
+        timeout=settings.wecom_api_timeout_seconds
+    ) as client:
+        response = await client.post(
+            f"{settings.wecom_api_base}/cgi-bin/message/send",
+            params={"access_token": token},
+            json={
+                "touser": "|".join(recipients),
+                "msgtype": "text",
+                "agentid": int(settings.wecom_agent_id),
+                "text": {"content": content},
+                "safe": 0,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if payload.get("errcode") != 0:
+        raise RuntimeError(json.dumps(payload, ensure_ascii=False)[:400])

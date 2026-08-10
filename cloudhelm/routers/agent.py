@@ -239,13 +239,18 @@ def task_result(
     task.result = result or None
     task.error = error or None
     task.finished_at = datetime.now(UTC)
+    audit_detail = (
+        error
+        or ("completed" if task.action == "logs" else result)
+        or "completed"
+    )
     add_audit(
         db,
         action=f"task.{task.action}.result",
         target_type="container",
         target_id=task.container_id,
         success=success,
-        detail=(error or result or "completed")[:1000],
+        detail=audit_detail[:1000],
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
