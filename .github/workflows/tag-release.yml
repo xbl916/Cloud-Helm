@@ -10,6 +10,7 @@ on:
       - completed
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -47,3 +48,8 @@ jobs:
             --field "ref=refs/tags/$tag" \
             --field "sha=$VALIDATED_SHA"
           echo "Created $tag at $VALIDATED_SHA"
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            --field "release_tag=$tag"
+          echo "Dispatched Release workflow for $tag"

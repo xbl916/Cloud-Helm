@@ -76,3 +76,12 @@ def test_agent_compose_mounts_host_read_only_for_system_metrics():
     assert "CLOUDHELM_AGENT_HOST_UPTIME_STATS_PATH=/host/uptime" in environment
     dockerfile = (ROOT / "deploy/agent.Dockerfile").read_text(encoding="utf-8")
     assert "iproute2" in dockerfile
+
+
+def test_automatic_tag_workflow_explicitly_dispatches_release():
+    workflow = (ROOT / ".github/workflows/tag-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "actions: write" in workflow
+    assert "gh workflow run release.yml" in workflow
+    assert '--field "release_tag=$tag"' in workflow
