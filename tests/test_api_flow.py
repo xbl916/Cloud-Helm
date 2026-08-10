@@ -350,8 +350,14 @@ def test_health_and_frontend(client: TestClient):
     assert "writable_layer_bytes" in script.text
     assert "can_manage:level==='manage'" in script.text
     assert "state.user.can_manage_access" in script.text
+    assert "/access/preview" in script.text
+    assert "expected_version" in script.text
 
     style = client.get("/assets/app.css")
     assert style.status_code == 200
     assert ".container-main span{white-space:normal" in style.text
     assert "overflow-wrap:anywhere" in style.text
+    assert "@media(max-width:480px)" in style.text
+    assert "@media(max-width:390px)" in style.text
+    assert "@media(max-width:360px)" in style.text
+    assert "word-break:break-word" in style.text

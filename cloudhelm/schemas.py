@@ -82,6 +82,7 @@ class AccessRuleInput(BaseModel):
 class AccessConfigInput(BaseModel):
     restricted: bool
     rules: list[AccessRuleInput] = Field(default_factory=list, max_length=500)
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class EnrollRequest(BaseModel):

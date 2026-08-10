@@ -243,3 +243,123 @@ def test_scoped_manager_can_delegate_only_inside_own_container(
     )
     assert other.status_code == 200
     assert other.json()["permissions"]["manage"] is True
+
+
+def test_access_preview_lock_effective_managers_and_emergency_revoke(
+    client: TestClient, admin_headers: dict[str, str], session_for
+):
+    with SessionLocal() as db:
+        node = Node(
+            agent_key="access-safety-node",
+            name="权限安全节点",
+            environment="access-safety",
+            agent_token_hash="hash",
+        )
+        db.add(node)
+        db.flush()
+        container = Container(
+            node_id=node.id,
+            docker_id="access-safety-container",
+            name="权限安全容器",
+            image="example/safety:1",
+        )
+        db.add(container)
+        db.commit()
+        node_id, container_id = node.id, container.id
+
+    manager = _create_user(client, admin_headers, "safety.manager", "operator")
+    target = _create_user(client, admin_headers, "safety.target", "operator")
+    assert client.put(
+        f"/api/v1/users/{manager['id']}/access",
+        headers=admin_headers,
+        json={
+            "restricted": True,
+            "rules": [
+                {"scope_type": "node", "node_id": node_id, "can_manage": True}
+            ],
+        },
+    ).status_code == 200
+
+    manager_headers = session_for("safety.manager")
+    initial = client.get(
+        f"/api/v1/users/{target['id']}/access", headers=manager_headers
+    ).json()
+    payload = {
+        "restricted": True,
+        "expected_version": initial["version"],
+        "rules": [
+            {
+                "scope_type": "container",
+                "node_id": node_id,
+                "container_id": container_id,
+                "can_manage": True,
+            }
+        ],
+    }
+    preview = client.post(
+        f"/api/v1/users/{target['id']}/access/preview",
+        headers=manager_headers,
+        json=payload,
+    )
+    assert preview.status_code == 200
+    assert preview.json()["summary"] == {
+        "added": 1,
+        "removed": 0,
+        "changed": 0,
+        "management_elevations": 1,
+    }
+    saved = client.put(
+        f"/api/v1/users/{target['id']}/access",
+        headers=manager_headers,
+        json=payload,
+    )
+    assert saved.status_code == 200
+    assert saved.json()["version"] == initial["version"] + 1
+    stale = client.put(
+        f"/api/v1/users/{target['id']}/access",
+        headers=manager_headers,
+        json=payload,
+    )
+    assert stale.status_code == 409
+
+    effective = client.get(
+        f"/api/v1/users/{target['id']}/access/effective",
+        headers=manager_headers,
+    )
+    assert effective.status_code == 200
+    container_access = next(
+        item
+        for item in effective.json()["resources"]
+        if item["resource_id"] == container_id
+    )
+    assert container_access["permissions"] == {
+        "view": True,
+        "logs": True,
+        "operate": True,
+        "manage": True,
+    }
+    assert container_access["sources"]
+
+    managers = client.get(
+        f"/api/v1/access/managers?node_id={node_id}&container_id={container_id}",
+        headers=manager_headers,
+    )
+    assert managers.status_code == 200
+    manager_ids = {item["user_id"] for item in managers.json()["managers"]}
+    assert {manager["id"], target["id"]}.issubset(manager_ids)
+
+    admin_headers = session_for("admin-wecom-id")
+    revoked = client.delete(
+        f"/api/v1/users/{target['id']}/access/management",
+        headers=admin_headers,
+    )
+    assert revoked.status_code == 204
+    after = client.get(
+        f"/api/v1/users/{target['id']}/access/effective",
+        headers=admin_headers,
+    ).json()
+    container_access = next(
+        item for item in after["resources"] if item["resource_id"] == container_id
+    )
+    assert container_access["permissions"]["manage"] is False
+    assert container_access["permissions"]["operate"] is True

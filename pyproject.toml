@@ -1,6 +1,6 @@
 [project]
 name = "cloud-helm"
-version = "0.6.3"
+version = "0.6.4"
 description = "Cloud Helm - a lightweight multi-node Docker operations console"
 requires-python = ">=3.11"
 dependencies = [

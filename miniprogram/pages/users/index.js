@@ -50,5 +50,13 @@ Page({
   async revoke(event) {
     try { await api.post(`/users/${event.currentTarget.dataset.id}/sessions/revoke`, {}); wx.showToast({title: "已下线", icon: "success"}) }
     catch (error) { this.setData({error: error.message}) }
+  },
+  revokeManagement(event) {
+    const {id, name} = event.currentTarget.dataset
+    wx.showModal({title: "撤销全部资源管理权？", content: `${name} 的查看、日志和运维权限会保留，操作将写入审计日志。`, confirmColor: "#c54444", success: async result => {
+      if (!result.confirm) return
+      try { await api.del(`/users/${id}/access/management`); await this.load() }
+      catch (error) { this.setData({error: error.message}) }
+    }})
   }
 })

@@ -22,6 +22,7 @@ Page({
     this.setData({loading: true, error: ""})
     try {
       const [config, resources] = await Promise.all([api.get(`/users/${this.userId}/access`), api.get("/access/resources")])
+      this.accessVersion = config.version
       const existing = new Map(config.rules.map(rule => [key(rule), rule]))
       const levels = this.data.role === "operator" ? ["仅查看", "查看 + 日志", "查看 + 日志 + 运维", "资源管理员"] : ["仅查看", "查看 + 日志"]
       this.editable = new Set(resources.editable_scope_keys || [])
@@ -68,7 +69,21 @@ Page({
       }
     }) : []
     try {
-      await api.put(`/users/${this.userId}/access`, {restricted: this.data.restricted, rules})
+      const payload = {restricted: this.data.restricted, rules, expected_version: this.accessVersion}
+      const preview = await api.post(`/users/${this.userId}/access/preview`, payload)
+      const summary = preview.summary
+      const changed = summary.added + summary.removed + summary.changed + (preview.restricted_changed ? 1 : 0)
+      if (!changed) { wx.showToast({title: "权限没有变化", icon: "none"}); return }
+      const confirmed = await new Promise(resolve => wx.showModal({
+        title: "确认修改权限？",
+        content: `新增 ${summary.added} 项，移除 ${summary.removed} 项，调整 ${summary.changed} 项。${summary.management_elevations ? `其中 ${summary.management_elevations} 项将授予资源管理权。` : ""}操作会记录审计日志。`,
+        confirmColor: "#c54444",
+        success: result => resolve(result.confirm),
+        fail: () => resolve(false)
+      }))
+      if (!confirmed) return
+      const saved = await api.put(`/users/${this.userId}/access`, payload)
+      this.accessVersion = saved.version
       wx.showToast({title: "权限已保存", icon: "success"})
       setTimeout(() => wx.navigateBack(), 700)
     } catch (error) { this.setData({error: error.message}) }
