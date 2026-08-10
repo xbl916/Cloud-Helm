@@ -1,6 +1,7 @@
+import asyncio
 import secrets
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,6 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from cloudhelm import __version__
+from cloudhelm.alerts import (
+    cleanup_alert_events,
+    evaluate_offline_alerts,
+    seed_default_alert_rules,
+    send_alert_notification,
+)
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
 from cloudhelm.dependencies import CSRF_COOKIE, SESSION_COOKIE
@@ -41,11 +48,35 @@ def bootstrap_admin() -> None:
         db.commit()
 
 
+async def alert_monitor() -> None:
+    interval = max(15, min(30, settings.node_offline_seconds // 2))
+    next_cleanup = datetime.now(UTC)
+    while True:
+        await asyncio.sleep(interval)
+        now = datetime.now(UTC)
+        with SessionLocal() as db:
+            event_ids = evaluate_offline_alerts(db, now, settings)
+            if now >= next_cleanup:
+                cleanup_alert_events(db, settings, now)
+                next_cleanup = now + timedelta(hours=1)
+            db.commit()
+        for event_id in event_ids:
+            await send_alert_notification(event_id, settings)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
     bootstrap_admin()
-    yield
+    with SessionLocal() as db:
+        seed_default_alert_rules(db, settings)
+    alert_task = asyncio.create_task(alert_monitor())
+    try:
+        yield
+    finally:
+        alert_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await alert_task
 
 
 app = FastAPI(

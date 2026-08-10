@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     metrics_history_interval_seconds: int = Field(default=300, ge=60, le=3600)
     metrics_history_retention_hours: int = Field(default=168, ge=1, le=8760)
     metrics_history_max_rows: int = Field(default=200000, ge=1000, le=20000000)
+    alerts_enabled: bool = True
+    alert_event_retention_hours: int = Field(default=2160, ge=24, le=17520)
+    alert_event_max_rows: int = Field(default=10000, ge=100, le=1000000)
+    alert_notifications_enabled: bool = False
+    alert_wecom_userids: str = ""
+
+    @property
+    def alert_recipients(self) -> list[str]:
+        values = [item.strip() for item in self.alert_wecom_userids.split(",")]
+        return [item for item in dict.fromkeys(values) if item]
 
     @field_validator(
         "agent_enrollment_token", "wecom_secret", "wecom_miniprogram_secret"
@@ -75,6 +85,10 @@ class Settings(BaseSettings):
             raise ValueError("example public_base_url must be replaced")
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("public_base_url must use HTTP or HTTPS")
+        if self.alert_notifications_enabled and not self.alert_recipients:
+            raise ValueError(
+                "alert_wecom_userids is required when alert notifications are enabled"
+            )
         return self
 
     @property

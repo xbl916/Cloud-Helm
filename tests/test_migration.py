@@ -127,10 +127,31 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.connect() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 4
+        ).scalar_one() == 5
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
             == "原容器"
         )
     assert list(tmp_path.glob("cloudhelm-0.5.2.db.pre-*.bak"))
+
+
+def test_sqlite_backup_is_created_before_schema_changes(tmp_path):
+    database = tmp_path / "legacy.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(text("CREATE TABLE legacy_marker (value TEXT NOT NULL)"))
+        connection.execute(
+            text("INSERT INTO legacy_marker (value) VALUES ('preserved')")
+        )
+
+    initialize_database(legacy_engine)
+
+    [backup] = list(tmp_path.glob("legacy.db.pre-*.bak"))
+    backup_engine = create_engine(f"sqlite:///{backup}")
+    backup_tables = set(inspect(backup_engine).get_table_names())
+    assert backup_tables == {"legacy_marker"}
+    with backup_engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT value FROM legacy_marker")
+        ).scalar_one() == "preserved"

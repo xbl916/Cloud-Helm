@@ -85,6 +85,32 @@ class AccessConfigInput(BaseModel):
     expected_version: int | None = Field(default=None, ge=1)
 
 
+class AlertRuleInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scope_type: Literal["all", "environment", "node", "container"] = "all"
+    environment: str | None = Field(default=None, max_length=40)
+    node_id: str | None = Field(default=None, max_length=36)
+    container_id: str | None = Field(default=None, max_length=36)
+    metric: Literal[
+        "node_offline",
+        "node_cpu_percent",
+        "node_memory_percent",
+        "node_disk_percent",
+        "node_inode_percent",
+        "container_cpu_percent",
+        "container_memory_percent",
+        "container_unhealthy",
+        "container_oom_killed",
+        "container_restarting",
+    ]
+    operator: Literal["gte", "lte"] = "gte"
+    threshold: float = Field(ge=0, le=1000000)
+    consecutive_required: int = Field(default=1, ge=1, le=100)
+    severity: Literal["info", "warning", "critical"] = "warning"
+    enabled: bool = True
+    notify: bool = True
+
+
 class EnrollRequest(BaseModel):
     enrollment_token: str
     agent_key: str = Field(min_length=8, max_length=100)

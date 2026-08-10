@@ -2,9 +2,10 @@ import json
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 from sqlalchemy import select, update
 
+from cloudhelm.alerts import evaluate_heartbeat_alerts, send_alert_notification
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import AgentNode, Config, Db
 from cloudhelm.metrics import record_metric_history
@@ -63,7 +64,11 @@ def enroll(payload: EnrollRequest, db: Db, settings: Config) -> EnrollResponse:
 
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
 def heartbeat(
-    payload: HeartbeatRequest, node: AgentNode, db: Db, settings: Config
+    payload: HeartbeatRequest,
+    background_tasks: BackgroundTasks,
+    node: AgentNode,
+    db: Db,
+    settings: Config,
 ) -> Response:
     now = datetime.now(UTC)
     node.hostname = payload.hostname
@@ -147,7 +152,12 @@ def heartbeat(
         reported_containers.append(item)
     db.flush()
     record_metric_history(db, node, reported_containers, payload, now, settings)
+    alert_event_ids = evaluate_heartbeat_alerts(
+        db, node, reported_containers, payload, now, settings
+    )
     db.commit()
+    for event_id in alert_event_ids:
+        background_tasks.add_task(send_alert_notification, event_id, settings)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

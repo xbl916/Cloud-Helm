@@ -16,6 +16,9 @@ from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
 from cloudhelm.image_reference import validate_tag_change
 from cloudhelm.models import (
     AccessRule,
+    AlertEvent,
+    AlertRule,
+    AlertState,
     AuditLog,
     Container,
     MetricSample,
@@ -29,6 +32,7 @@ from cloudhelm.schemas import (
     AccessConfigInput,
     AccessRuleInput,
     ActionRequest,
+    AlertRuleInput,
     TaskOut,
     UserCreate,
     UserUpdate,
@@ -510,6 +514,260 @@ def list_audit(
         }
         for item in items
     ]
+
+
+def _alert_rule_out(rule: AlertRule) -> dict:
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "scope_type": rule.scope_type,
+        "environment": rule.environment,
+        "node_id": rule.node_id,
+        "container_id": rule.container_id,
+        "metric": rule.metric,
+        "operator": rule.operator,
+        "threshold": rule.threshold,
+        "consecutive_required": rule.consecutive_required,
+        "severity": rule.severity,
+        "enabled": rule.enabled,
+        "notify": rule.notify,
+        "updated_at": _iso(rule.updated_at),
+    }
+
+
+def _validate_alert_scope(db: Db, payload: AlertRuleInput) -> None:
+    if payload.metric.startswith("node_") and payload.scope_type == "container":
+        raise HTTPException(status_code=422, detail="节点指标不能使用容器范围")
+    if payload.scope_type == "environment":
+        environments = {item for item in db.scalars(select(Node.environment)).all()}
+        if not payload.environment or payload.environment not in environments:
+            raise HTTPException(status_code=422, detail="告警环境不存在")
+    if payload.scope_type == "node" and (
+        not payload.node_id or not db.get(Node, payload.node_id)
+    ):
+        raise HTTPException(status_code=422, detail="告警节点不存在")
+    if payload.scope_type == "container":
+        container = db.get(Container, payload.container_id or "")
+        if not container:
+            raise HTTPException(status_code=422, detail="告警容器不存在")
+
+
+def _alert_rule_values(payload: AlertRuleInput) -> dict:
+    values = payload.model_dump()
+    if payload.scope_type != "environment":
+        values["environment"] = None
+    if payload.scope_type != "node":
+        values["node_id"] = None
+    if payload.scope_type != "container":
+        values["container_id"] = None
+    return values
+
+
+@router.get("/alerts/rules")
+def list_alert_rules(db: Db, admin: Admin) -> list[dict]:
+    return [
+        _alert_rule_out(rule)
+        for rule in db.scalars(select(AlertRule).order_by(AlertRule.name)).all()
+    ]
+
+
+@router.post("/alerts/rules", status_code=status.HTTP_201_CREATED)
+def create_alert_rule(
+    payload: AlertRuleInput,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> dict:
+    _validate_alert_scope(db, payload)
+    if db.scalar(select(AlertRule.id).where(AlertRule.name == payload.name)):
+        raise HTTPException(status_code=409, detail="告警规则名称已存在")
+    rule = AlertRule(**_alert_rule_values(payload))
+    db.add(rule)
+    db.flush()
+    add_audit(
+        db,
+        action="alert.rule.create",
+        target_type="alert_rule",
+        target_id=rule.id,
+        target_name=rule.name,
+        user=admin,
+        detail=f"metric={rule.metric}, threshold={rule.threshold}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return _alert_rule_out(rule)
+
+
+@router.put("/alerts/rules/{rule_id}")
+def update_alert_rule(
+    rule_id: str,
+    payload: AlertRuleInput,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> dict:
+    rule = db.get(AlertRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="告警规则不存在")
+    _validate_alert_scope(db, payload)
+    duplicate = db.scalar(
+        select(AlertRule.id).where(
+            AlertRule.name == payload.name, AlertRule.id != rule.id
+        )
+    )
+    if duplicate:
+        raise HTTPException(status_code=409, detail="告警规则名称已存在")
+    for field, value in _alert_rule_values(payload).items():
+        setattr(rule, field, value)
+    rule.updated_at = datetime.now(UTC)
+    add_audit(
+        db,
+        action="alert.rule.update",
+        target_type="alert_rule",
+        target_id=rule.id,
+        target_name=rule.name,
+        user=admin,
+        detail=f"metric={rule.metric}, threshold={rule.threshold}, enabled={rule.enabled}",
+        request=request,
+        settings=settings,
+    )
+    # A changed threshold/scope must not inherit an old consecutive count or
+    # active state from the previous rule definition.
+    db.execute(delete(AlertState).where(AlertState.rule_id == rule.id))
+    db.commit()
+    return _alert_rule_out(rule)
+
+
+@router.delete("/alerts/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_alert_rule(
+    rule_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> None:
+    rule = db.get(AlertRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="告警规则不存在")
+    add_audit(
+        db,
+        action="alert.rule.delete",
+        target_type="alert_rule",
+        target_id=rule.id,
+        target_name=rule.name,
+        user=admin,
+        request=request,
+        settings=settings,
+    )
+    db.execute(delete(AlertEvent).where(AlertEvent.rule_id == rule.id))
+    db.execute(delete(AlertState).where(AlertState.rule_id == rule.id))
+    db.delete(rule)
+    db.commit()
+
+
+def _can_access_alert(
+    db: Db, user: User, event: AlertEvent, permission: str = "view"
+) -> bool:
+    if user.role == UserRole.admin:
+        return True
+    if permission == "operate" and user.role != UserRole.operator:
+        return False
+    if not user.resource_restricted:
+        return True
+    node = db.get(Node, event.node_id)
+    if not node:
+        return False
+    container = (
+        db.get(Container, event.target_id)
+        if event.target_type == "container"
+        else None
+    )
+    return can_access(user, load_access_rules(db, user), node, container, permission)
+
+
+@router.get("/alerts/events")
+def list_alert_events(
+    db: Db,
+    user: CurrentUser,
+    limit: int = Query(default=100, ge=1, le=500),
+    active_only: bool = False,
+) -> list[dict]:
+    events = list(
+        db.scalars(
+            select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(limit * 5)
+        ).all()
+    )
+    active_keys = {
+        (state.rule_id, state.target_type, state.target_id)
+        for state in db.scalars(
+            select(AlertState).where(AlertState.active.is_(True))
+        ).all()
+    }
+    result = []
+    for event in events:
+        active = (event.rule_id, event.target_type, event.target_id) in active_keys
+        if (active_only and not active) or not _can_access_alert(db, user, event):
+            continue
+        result.append(
+            {
+                "id": event.id,
+                "rule_id": event.rule_id,
+                "rule_name": event.rule_name,
+                "target_type": event.target_type,
+                "target_id": event.target_id,
+                "target_name": event.target_name,
+                "status": event.status,
+                "active": active,
+                "severity": event.severity,
+                "metric": event.metric,
+                "value": event.value,
+                "threshold": event.threshold,
+                "message": event.message,
+                "notified": event.notified,
+                "notification_error": event.notification_error,
+                "acknowledged": event.acknowledged_at is not None,
+                "can_acknowledge": _can_access_alert(db, user, event, "operate"),
+                "created_at": _iso(event.created_at),
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+
+@router.post(
+    "/alerts/events/{event_id}/acknowledge",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def acknowledge_alert_event(
+    event_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    user: CurrentUser,
+) -> None:
+    event = db.get(AlertEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="告警事件不存在")
+    if not _can_access_alert(db, user, event, "operate"):
+        raise HTTPException(status_code=403, detail="需要该资源的运维权限")
+    event.acknowledged_by = user.id
+    event.acknowledged_at = datetime.now(UTC)
+    add_audit(
+        db,
+        action="alert.acknowledge",
+        target_type=event.target_type,
+        target_id=event.target_id,
+        target_name=event.target_name,
+        user=user,
+        detail=f"rule={event.rule_name}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
 
 
 @router.get("/users")

@@ -102,6 +102,7 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
             "0004_access_optimistic_lock",
             {"users": {"access_version": "INTEGER NOT NULL DEFAULT 1"}},
         ),
+        ("0005_alerting", {}),
     ]
 
 
@@ -188,9 +189,10 @@ def initialize_database(target_engine: Engine = engine) -> None:
         and Path(database).stat().st_size > 0
     )
     _sqlite_integrity_check(target_engine)
-    Base.metadata.create_all(bind=target_engine)
+    migration_pending = _has_pending_migrations(target_engine)
     _backup_sqlite(
-        target_engine, sqlite_existed, _has_pending_migrations(target_engine)
+        target_engine, sqlite_existed, migration_pending
     )
+    Base.metadata.create_all(bind=target_engine)
     _apply_migrations(target_engine)
     _sqlite_integrity_check(target_engine)

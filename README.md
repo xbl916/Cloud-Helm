@@ -2,13 +2,14 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.6.4`。支持从 `0.5.2` SQLite 原地升级；Server 会先执行完整性检查并创建按版本命名的一致性备份，再通过有版本记录的幂等迁移补充字段，不会重建已有表或清空用户、权限、节点、容器及审计数据。
+当前版本为 `0.7.0`。新增节点/容器阈值告警、触发与恢复事件、按资源权限查看和确认，以及可选的企业微信应用消息通知。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
+- [监控告警与企业微信通知](#监控告警与企业微信通知)
 - [人员与容器权限](#人员与容器权限)
 - [企业自用小程序](#企业自用小程序)
 - [实际使用中的安全注意事项](#实际使用中的安全注意事项)
@@ -93,15 +94,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.6.4.tar.gz.sha256
-tar -xzf cloudhelm-0.6.4.tar.gz
-cd cloudhelm-0.6.4
+sha256sum -c cloudhelm-0.7.0.tar.gz.sha256
+tar -xzf cloudhelm-0.7.0.tar.gz
+cd cloudhelm-0.7.0
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.6.4.tar.gz: OK
+cloudhelm-0.7.0.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -176,6 +177,11 @@ CLOUDHELM_METRICS_HISTORY_ENABLED=true
 CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS=300
 CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS=168
 CLOUDHELM_METRICS_HISTORY_MAX_ROWS=200000
+CLOUDHELM_ALERTS_ENABLED=true
+CLOUDHELM_ALERT_EVENT_RETENTION_HOURS=2160
+CLOUDHELM_ALERT_EVENT_MAX_ROWS=10000
+CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=false
+CLOUDHELM_ALERT_WECOM_USERIDS=
 CLOUDHELM_TRUST_PROXY_HEADERS=true
 CLOUDHELM_BIND_ADDRESS=127.0.0.1
 CLOUDHELM_PORT=8080
@@ -208,6 +214,11 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS`|历史采样间隔|默认 300 秒，可设 60–3600；心跳仍按 Agent 上报间隔更新当前值|
 |`CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS`|历史保留时间|默认 168 小时（7 天），可设 1–8760；PostgreSQL 可按容量提高到半年或一年|
 |`CLOUDHELM_METRICS_HISTORY_MAX_ROWS`|所有节点和容器合计的历史行数硬上限|默认 200000，可设 1000–20000000；达到后优先保留最新数据|
+|`CLOUDHELM_ALERTS_ENABLED`|是否评估节点与容器告警规则|默认 `true`；关闭后不产生新事件，但保留已有规则和历史事件|
+|`CLOUDHELM_ALERT_EVENT_RETENTION_HOURS`|告警事件保留时间|默认 2160 小时（90 天），可设 24–17520（两年）|
+|`CLOUDHELM_ALERT_EVENT_MAX_ROWS`|告警事件总行数硬上限|默认 10000，可设 100–1000000；每小时清理过期及超限事件|
+|`CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED`|是否通过企微自建应用发送告警消息|默认 `false`；启用前先确认应用具有目标成员可见范围|
+|`CLOUDHELM_ALERT_WECOM_USERIDS`|告警消息接收人|填写一个或多个准确企微 `UserId`，用英文逗号分隔；不支持姓名或手机号|
 |`CLOUDHELM_TRUST_PROXY_HEADERS`|读取代理转发的真实 IP|仅在后端只允许可信代理访问时设为 `true`|
 |`CLOUDHELM_BIND_ADDRESS`|宿主机监听地址|保持 `127.0.0.1`|
 |`CLOUDHELM_PORT`|宿主机后端端口|默认 8080，不对公网开放|
@@ -330,7 +341,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.6.4/deploy
+cd cloudhelm-0.7.0/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -455,7 +466,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml exec agent nvidia-s
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-0.6.4 的 overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
+当前 GPU overlay 显式使用 `runtime: nvidia`，为 Agent 保留全部 NVIDIA GPU，并只启用 `NVIDIA_DRIVER_CAPABILITIES=utility`。NVIDIA runtime 会把与宿主机驱动版本匹配的 `/usr/bin/nvidia-smi` 和 NVML 库只读注入容器；镜像不会内置一个可能与宿主机驱动不兼容的固定版本。上述检查应能列出显卡，并在日志中看到 `Reported N NVIDIA GPUs`。若容器启动时报 `unknown or invalid runtime name: nvidia`，说明尚未执行 `nvidia-ctk runtime configure`；若 `config` 阶段报 GPU device reservation 错误，应检查 Docker Compose v2 和 Toolkit 安装。
 
 注册成功后，NVIDIA 节点重新创建容器时也必须继续带两个 `-f` 参数：
 
@@ -549,11 +560,41 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 - GPU/显存利用率、显存已用与总量、温度、风扇、实时功耗与功率上限；
 - Docker 为每个容器配置的 GPU ID、数量请求或“全部 GPU”。
 
-容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.6.4 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
+容器上的 GPU 信息来自 Docker 配置，表示“允许该容器访问哪些 GPU”。容器详情中的负载、显存、温度和功耗是被分配物理卡的整卡指标，不是该容器独占的利用率；若多容器共享同一张卡，指标包含这些容器及宿主机进程的合计活动。0.7.0 保存 CPU、内存、网络、磁盘等通用指标的有界历史曲线，但仍不保存 GPU 历史，也不采集进程级或逐容器 GPU 利用率。MIG 开启时，部分利用率字段可能由驱动返回 `N/A`，页面会显示 `—`；这是 NVIDIA 工具本身的数据限制。
 
 主机级 GPU 指标可能反映同机其他工作负载的活动，因此权限做了单独隔离：管理员、全资源用户和具有环境/节点查看权限的人可以看到全部 GPU；只有项目或容器授权的人，只能看到其可见容器明确分配到的 GPU 及这些卡的当前指标，看不到同机其他 GPU。容器使用 `count:N` 但 Docker 未记录具体设备 ID 时，页面只能显示请求数量，不能把指标猜测性地归到某张卡。
 
 字段语义参考 [NVIDIA `nvidia-smi` 官方文档](https://docs.nvidia.com/deploy/nvidia-smi/index.html)。
+
+## 监控告警与企业微信通知
+
+0.7.0 会在 Agent 心跳写入当前指标后立即评估告警；节点离线规则由 Server 独立定时检查，因此 Agent 完全断联时仍能触发。首次启动会创建以下默认规则，管理员可在 H5 的“我的 → 告警规则”修改阈值、连续次数、启用状态和是否通知：
+
+|默认规则|默认阈值|连续次数|级别|
+|---|---:|---:|---|
+|节点离线|使用 `CLOUDHELM_NODE_OFFLINE_SECONDS`|1|严重|
+|节点内存过高|≥ 90%|3|警告|
+|节点根磁盘空间不足|≥ 90%|1|严重|
+|节点 inode 空间不足|≥ 90%|1|严重|
+|容器内存过高|≥ 95%|3|警告|
+|容器健康检查失败|异常|1|严重|
+|容器发生 OOM Kill|是|1|严重|
+|容器反复重启|是|2|警告|
+
+规则可应用到全部资源、某个环境、节点或容器。管理员还可通过 API 创建 CPU 等额外规则；修改规则会清空该规则旧的连续计数和活动状态，避免新阈值继承旧状态。系统只在状态从正常变为异常时写一条“触发”事件，从异常恢复时写一条“恢复”事件，不会每次心跳重复写库。
+
+用户在“审计 → 监控告警”只能看到其资源授权范围内的事件。全局管理员和对该资源具有运维权限的运维人员可以确认事件；只读用户即使能够查看，也不能确认。确认只表示人员已知悉，不会关闭仍在持续的异常，恢复状态仍由后续真实指标决定。
+
+默认事件保留 90 天且全库最多 10000 行，Server 每小时按时间和行数双重清理，SQLite 和 PostgreSQL 都不会无限增长。事件量只与触发/恢复次数相关，不按每个采样点保存；若 PostgreSQL 需要更长留存，可提高 `CLOUDHELM_ALERT_EVENT_RETENTION_HOURS` 和 `CLOUDHELM_ALERT_EVENT_MAX_ROWS`，同时纳入容量与备份评估。
+
+企微消息通知默认关闭。需要启用时，在 `.env` 设置：
+
+```dotenv
+CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=true
+CLOUDHELM_ALERT_WECOM_USERIDS=zhangsan,lisi
+```
+
+接收人必须填写通讯录中的准确 `UserId`，并处于该云舵自建应用的可见范围内。消息使用现有 `CLOUDHELM_WECOM_AGENT_ID` 和 `CLOUDHELM_WECOM_SECRET` 调用企微应用消息接口，不需要新增 Secret。通知失败只记录在事件中并在页面显示，不会让 Agent 心跳失败；修复企微配置后，新事件会继续尝试发送，当前版本不会自动重发旧事件。若只需要页面告警，保持通知开关为 `false` 且接收人为空即可。
 
 ## 人员与容器权限
 
@@ -715,11 +756,11 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.5.2 SQLite 原地升级
+## 从 0.5.2–0.6.4 原地升级到 0.7.0
 
-升级会给 `nodes` 和 `containers` 表补充监控列、给既有 `access_rules` 表补充默认关闭的 `can_manage` 字段、给 `users` 增加从 `1` 开始的权限版本号，并新建只保存数值的 `metric_samples` 有界历史表；不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据或审计记录。迁移在新版 Server 启动时自动执行，并记录在 `schema_migrations`，再次启动不会重复执行。
+从 0.6.4 升级时，0.7.0 只会新增 `alert_rules`、`alert_states` 和 `alert_events` 三张告警表并写入 `0005_alerting` 迁移记录。更早版本还会依次补充监控列、资源管理权限、权限版本号和 `metric_samples` 有界历史表。迁移不会重建已有表，也不会修改已有用户、企微身份、既有授权含义、Agent 节点凭据、历史指标或审计记录；新版 Server 启动时自动执行并记录在 `schema_migrations`，再次启动不会重复执行。
 
-SQLite 启动升级前会运行 `PRAGMA integrity_check`，并在数据库旁创建一次 `cloudhelm.db.pre-0.6.4.bak` 一致性备份；升级后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加新变量也能启动，会使用 5 分钟采样、7 天保留和 20 万行硬上限的默认值。
+SQLite 会先运行 `PRAGMA integrity_check`，并在任何建表或迁移前通过 SQLite backup API 在数据库旁创建一次 `cloudhelm.db.pre-0.7.0.bak` 一致性备份；升级完成后再次执行完整性检查。这个自动备份是升级事故的额外保护，不能替代下面的停机备份。现有 `.env` 不增加变量也能启动：页面告警默认启用，企微消息通知默认关闭，事件默认保留 90 天且最多 10000 行。
 
 先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
 
@@ -743,7 +784,9 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-每台 Agent 节点也必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
+从 0.6.4 升级时不强制升级 Agent：0.7.0 告警直接使用现有心跳字段，0.6.4 Agent 与 0.7.0 Server 兼容。为了镜像版本统一可以把 Agent 镜像更新为 0.7.0，但无需修改 `agent.env`、重新注册或删除状态目录。
+
+如果从 0.5.2、0.6.0 等尚未采用宿主机网络视图的版本升级，每台 Agent 节点必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
 如果现有 `agent.env` 包含旧网络路径，必须改为以下值；需要固定网卡时再填写第二行，否则保持空值使用自动选择：
 
@@ -859,7 +902,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.6.4
+bash scripts/package-release.sh 0.7.0
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -867,11 +910,11 @@ bash scripts/package-release.sh 0.6.4
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.6.4
-git push origin v0.6.4
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.6.4`
-- `ghcr.io/xbl916/cloud-helm-agent:0.6.4`
+- `ghcr.io/xbl916/cloud-helm-server:0.7.0`
+- `ghcr.io/xbl916/cloud-helm-agent:0.7.0`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.6.4` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.7.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

@@ -42,6 +42,11 @@ class TaskStatus(str, enum.Enum):
     expired = "expired"
 
 
+class AlertStatus(str, enum.Enum):
+    triggered = "triggered"
+    recovered = "recovered"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -248,6 +253,93 @@ class MetricSample(Base):
     block_write_bps: Mapped[float] = mapped_column(Float, default=0.0)
     pids: Mapped[int] = mapped_column(Integer, default=0)
     restart_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    scope_type: Mapped[str] = mapped_column(String(20), default="all", index=True)
+    environment: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    node_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    container_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    metric: Mapped[str] = mapped_column(String(40), index=True)
+    operator: Mapped[str] = mapped_column(String(8), default="gte")
+    threshold: Mapped[float] = mapped_column(Float, default=0)
+    consecutive_required: Mapped[int] = mapped_column(Integer, default=1)
+    severity: Mapped[str] = mapped_column(String(12), default="warning")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    notify: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AlertState(Base):
+    __tablename__ = "alert_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_id", "target_type", "target_id", name="uq_alert_state_target"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("alert_rules.id", ondelete="CASCADE"), index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(12), index=True)
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    node_id: Mapped[str] = mapped_column(String(36), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    consecutive_count: Mapped[int] = mapped_column(Integer, default=0)
+    current_value: Mapped[float] = mapped_column(Float, default=0)
+    first_triggered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+
+
+class AlertEvent(Base):
+    __tablename__ = "alert_events"
+    __table_args__ = (
+        Index("ix_alert_events_created", "created_at"),
+        Index("ix_alert_events_target", "target_type", "target_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("alert_rules.id", ondelete="CASCADE"), index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(12))
+    target_id: Mapped[str] = mapped_column(String(36))
+    node_id: Mapped[str] = mapped_column(String(36), index=True)
+    target_name: Mapped[str] = mapped_column(String(255))
+    rule_name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), index=True)
+    severity: Mapped[str] = mapped_column(String(12), default="warning")
+    metric: Mapped[str] = mapped_column(String(40))
+    value: Mapped[float] = mapped_column(Float)
+    threshold: Mapped[float] = mapped_column(Float)
+    message: Mapped[str] = mapped_column(String(500))
+    notified: Mapped[bool] = mapped_column(Boolean, default=False)
+    notification_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
 
 
 class AuditLog(Base):
