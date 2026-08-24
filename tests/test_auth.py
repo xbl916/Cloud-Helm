@@ -1,9 +1,13 @@
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from cloudhelm.db import SessionLocal
 from cloudhelm.dependencies import CSRF_COOKIE, OAUTH_COOKIE, SESSION_COOKIE
+from cloudhelm.models import WebSession
 from cloudhelm.routers import auth
+from cloudhelm.security import digest_token
 
 
 def test_wecom_oauth_issues_server_session_and_blocks_replay(
@@ -44,6 +48,36 @@ def test_wecom_oauth_issues_server_session_and_blocks_replay(
     assert replay.status_code == 403
 
 
+def test_wecom_pc_qr_uses_enterprise_sso_and_records_auth_method(
+    client: TestClient, monkeypatch
+):
+    started = client.get("/api/v1/auth/wecom/qr/start", follow_redirects=False)
+    assert started.status_code == 302
+    query = parse_qs(urlsplit(started.headers["location"]).query)
+    state = query["state"][0]
+    assert query["login_type"] == ["CorpApp"]
+    assert query["appid"] == ["ww-test-corp"]
+    assert query["agentid"] == ["1000002"]
+
+    async def fake_identity(code, settings):
+        return "admin-wecom-id"
+
+    monkeypatch.setattr(auth, "resolve_wecom_userid", fake_identity)
+    callback = client.get(
+        "/api/v1/auth/wecom/callback",
+        params={"code": "pc-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 303
+    raw_session = client.cookies.get(SESSION_COOKIE)
+    with SessionLocal() as db:
+        web_session = db.scalar(
+            select(WebSession).where(WebSession.token_hash == digest_token(raw_session))
+        )
+        assert web_session is not None
+        assert web_session.auth_method == "wecom_qr"
+
+
 def test_csrf_and_origin_are_required_for_browser_writes(
     client: TestClient, admin_headers: dict[str, str]
 ):
@@ -61,6 +95,7 @@ def test_csrf_and_origin_are_required_for_browser_writes(
 
 def test_password_login_endpoint_does_not_exist(client: TestClient):
     assert client.get("/api/v1/auth/login").status_code == 404
+    assert client.get("/api/v1/auth/wechat/start").status_code == 404
 
 
 def test_wecom_miniprogram_issues_bearer_session(

@@ -146,6 +146,31 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
                 }
             },
         ),
+        (
+            "0010_pc_qr_logins",
+            {
+                "web_sessions": {
+                    "auth_method": "VARCHAR(30) NOT NULL DEFAULT 'wecom_h5'",
+                },
+                "oauth_states": {
+                    "provider": "VARCHAR(30) NOT NULL DEFAULT 'wecom_h5'",
+                },
+            },
+        ),
+        (
+            "0011_gateway_service_discovery",
+            {
+                "service_instances": {
+                    "endpoint_scheme": "VARCHAR(12)",
+                    "endpoint_host": "VARCHAR(253)",
+                    "endpoint_port": "INTEGER",
+                },
+            },
+        ),
+        (
+            "0012_node_gateway_address",
+            {"nodes": {"gateway_address": "VARCHAR(45)"}},
+        ),
     ]
 
 

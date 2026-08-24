@@ -61,6 +61,14 @@ def main() -> None:
         r"^# Cloud Helm ([0-9]+\.[0-9]+\.[0-9]+)$",
         expected,
     )
+    deployment_guide = f"docs/deploy-and-upgrade-{expected}.md"
+    if not (PROJECT_ROOT / deployment_guide).is_file():
+        raise SystemExit(f"{deployment_guide}: deployment guide not found")
+    require_match(
+        deployment_guide,
+        r"^# Cloud Helm ([0-9]+\.[0-9]+\.[0-9]+) 全新部署与 0\.8\.1 升级$",
+        expected,
+    )
     print(f"Version consistency check passed: {expected}")
 
 

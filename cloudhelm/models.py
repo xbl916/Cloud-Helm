@@ -76,6 +76,9 @@ class WebSession(Base):
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    auth_method: Mapped[str] = mapped_column(
+        String(30), default="wecom_h5", index=True
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -96,6 +99,7 @@ class OAuthState(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     state_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(30), default="wecom_h5")
     next_path: Mapped[str] = mapped_column(String(512), default="/")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     used_at: Mapped[datetime | None] = mapped_column(
@@ -114,6 +118,7 @@ class Node(Base):
     name: Mapped[str] = mapped_column(String(120), index=True)
     hostname: Mapped[str] = mapped_column(String(255), default="")
     environment: Mapped[str] = mapped_column(String(40), default="default", index=True)
+    gateway_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     agent_token_hash: Mapped[str] = mapped_column(String(512))
     agent_version: Mapped[str] = mapped_column(String(30), default="unknown")
     docker_version: Mapped[str] = mapped_column(String(80), default="unknown")
@@ -495,6 +500,9 @@ class ServiceInstance(Base):
     monitored: Mapped[bool] = mapped_column(Boolean, default=True)
     accepting: Mapped[bool] = mapped_column(Boolean, default=True)
     desired_state: Mapped[str] = mapped_column(String(16), default="serve")
+    endpoint_scheme: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    endpoint_host: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    endpoint_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     drain_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

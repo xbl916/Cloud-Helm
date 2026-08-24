@@ -35,6 +35,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "system_metrics_error",
         "system_metrics_updated_at",
         "metrics_history_at",
+        "gateway_address",
     }.issubset(node_columns)
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
     access_rule_columns = {
@@ -146,7 +147,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.connect() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 9
+        ).scalar_one() == 12
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
@@ -180,6 +181,52 @@ def test_initialize_database_adds_module_release_columns(tmp_path):
         "release_started_at",
         "release_updated_at",
     }.issubset(columns)
+
+
+def test_initialize_database_adds_pc_qr_auth_columns(tmp_path):
+    database = tmp_path / "cloudhelm-before-pc-qr.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(text("CREATE TABLE web_sessions (id VARCHAR(36) PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE oauth_states (id VARCHAR(36) PRIMARY KEY)"))
+
+    initialize_database(legacy_engine)
+
+    inspector = inspect(legacy_engine)
+    session_columns = {
+        item["name"] for item in inspector.get_columns("web_sessions")
+    }
+    state_columns = {item["name"] for item in inspector.get_columns("oauth_states")}
+    assert "auth_method" in session_columns
+    assert "provider" in state_columns
+
+
+def test_initialize_database_adds_gateway_endpoint_columns(tmp_path):
+    database = tmp_path / "cloudhelm-before-discovery.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE service_instances (id VARCHAR(36) PRIMARY KEY)")
+        )
+
+    initialize_database(legacy_engine)
+
+    columns = {
+        item["name"] for item in inspect(legacy_engine).get_columns("service_instances")
+    }
+    assert {"endpoint_scheme", "endpoint_host", "endpoint_port"}.issubset(columns)
+
+
+def test_initialize_database_adds_node_gateway_address(tmp_path):
+    database = tmp_path / "cloudhelm-before-node-gateway.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(text("CREATE TABLE nodes (id VARCHAR(36) PRIMARY KEY)"))
+
+    initialize_database(legacy_engine)
+
+    columns = {item["name"] for item in inspect(legacy_engine).get_columns("nodes")}
+    assert "gateway_address" in columns
 
 
 def test_sqlite_backup_is_created_before_schema_changes(tmp_path):

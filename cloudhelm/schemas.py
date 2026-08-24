@@ -1,3 +1,4 @@
+import ipaddress
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -298,6 +299,9 @@ class BusinessMetricReport(BaseModel):
     ready: bool = True
     accepting: bool = True
     container_id: str | None = Field(default=None, max_length=36)
+    endpoint_scheme: Literal["http", "https", "grpc", "grpcs"] | None = None
+    endpoint_host: str | None = Field(default=None, min_length=1, max_length=253)
+    endpoint_port: int | None = Field(default=None, ge=1, le=65535)
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("instance_id")
@@ -307,6 +311,33 @@ class BusinessMetricReport(BaseModel):
         if not value:
             raise ValueError("实例 ID 不能为空")
         return value
+
+    @field_validator("endpoint_host")
+    @classmethod
+    def normalize_endpoint_host(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
+        if (
+            not value
+            or any(character.isspace() for character in value)
+            or any(character in value for character in "/?#@")
+        ):
+            raise ValueError("服务地址必须是 IP 或不含路径的主机名")
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError as exc:
+            raise ValueError("服务地址必须是有效的 IPv4 或 IPv6 地址") from exc
+
+    @model_validator(mode="after")
+    def validate_endpoint(self) -> "BusinessMetricReport":
+        if (self.endpoint_scheme is None) != (self.endpoint_port is None):
+            raise ValueError("endpoint_scheme、endpoint_port 必须同时上报")
+        if self.endpoint_host is not None and self.endpoint_scheme is None:
+            raise ValueError("上报 endpoint_host 时必须同时上报协议和端口")
+        return self
 
 
 class ScalingServiceInput(BaseModel):
@@ -344,6 +375,33 @@ class ServiceInstanceCapacityInput(BaseModel):
 
 class ServiceInstanceMonitoringInput(BaseModel):
     monitored: bool
+
+
+class NodeGatewayAddressInput(BaseModel):
+    gateway_address: str | None = Field(default=None, max_length=45)
+
+    @field_validator("gateway_address")
+    @classmethod
+    def normalize_gateway_address(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError("网关访问地址必须是有效的 IPv4 或 IPv6 地址") from exc
+        if (
+            address.is_unspecified
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+        ):
+            raise ValueError("该 IP 不能作为网关访问地址")
+        return str(address)
 
 
 class ModuleReleaseInput(BaseModel):

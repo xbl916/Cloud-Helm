@@ -1,4 +1,5 @@
 import hashlib
+import html
 import secrets
 import threading
 import time
@@ -57,6 +58,7 @@ def _rate_limit_oauth_start(peer: str) -> None:
 
 
 def _wecom_error(message: str, status_code: int = 403) -> HTMLResponse:
+    safe_message = html.escape(message)
     body = (
         "<!doctype html><meta charset='utf-8'><meta name='viewport' "
         "content='width=device-width,initial-scale=1'><title>云舵登录失败</title>"
@@ -64,7 +66,7 @@ def _wecom_error(message: str, status_code: int = 403) -> HTMLResponse:
         "main{max-width:420px;margin:16vh auto;padding:28px;background:white;"
         "border-radius:18px;box-shadow:0 12px 40px #16334218}h1{font-size:22px}"
         "p{line-height:1.7;color:#607680}</style><main><h1>无法进入云舵</h1>"
-        f"<p>{message}</p><p>请从企业微信工作台重新打开，或联系管理员检查成员绑定。</p></main>"
+        f"<p>{safe_message}</p><p>请重新发起扫码，或联系管理员检查成员绑定。</p></main>"
     )
     return HTMLResponse(body, status_code=status_code)
 
@@ -172,6 +174,87 @@ async def resolve_wecom_miniprogram_userid(code: str, settings: Config) -> str:
     return user_id.strip()
 
 
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _new_oauth_state(
+    db: Db,
+    settings: Config,
+    *,
+    provider: str,
+    next_path: str | None = None,
+) -> str:
+    raw_state = secrets.token_hex(32)
+    now = datetime.now(UTC)
+    db.execute(
+        delete(OAuthState)
+        .where(OAuthState.expires_at < now)
+        .execution_options(synchronize_session=False)
+    )
+    db.execute(
+        delete(WebSession)
+        .where(WebSession.expires_at < now - timedelta(days=7))
+        .execution_options(synchronize_session=False)
+    )
+    db.add(
+        OAuthState(
+            state_hash=digest_token(raw_state),
+            provider=provider,
+            next_path=safe_relative_path(next_path),
+            expires_at=now + timedelta(seconds=settings.oauth_state_seconds),
+        )
+    )
+    db.commit()
+    return raw_state
+
+
+def _set_oauth_cookie(response: Response, raw_state: str, settings: Config) -> None:
+    response.set_cookie(
+        OAUTH_COOKIE,
+        raw_state,
+        max_age=settings.oauth_state_seconds,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _consume_oauth_state(
+    db: Db,
+    request: Request,
+    state: str,
+    *,
+    providers: set[str],
+) -> OAuthState:
+    cookie_state = request.cookies.get(OAUTH_COOKIE)
+    if not cookie_state or not secrets.compare_digest(cookie_state, state):
+        raise HTTPException(status_code=403, detail="登录请求校验失败，请重新发起登录。")
+    now = datetime.now(UTC)
+    oauth_state = db.scalar(
+        select(OAuthState).where(OAuthState.state_hash == digest_token(state))
+    )
+    if (
+        not oauth_state
+        or oauth_state.provider not in providers
+        or oauth_state.used_at is not None
+        or _aware(oauth_state.expires_at) <= now
+    ):
+        raise HTTPException(
+            status_code=403, detail="登录请求已经过期、类型不匹配或已被使用。"
+        )
+    consumed = db.execute(
+        update(OAuthState)
+        .where(OAuthState.id == oauth_state.id, OAuthState.used_at.is_(None))
+        .values(used_at=now)
+    )
+    db.commit()
+    if consumed.rowcount != 1:
+        raise HTTPException(status_code=403, detail="登录请求已经被使用，请重新发起登录。")
+    return oauth_state
+
+
 def _issue_session(
     *,
     db: Db,
@@ -179,6 +262,7 @@ def _issue_session(
     request: Request,
     user: User,
     audit_action: str,
+    auth_method: str,
 ) -> tuple[str, str, datetime]:
     now = datetime.now(UTC)
     active_sessions = list(
@@ -204,6 +288,7 @@ def _issue_session(
             token_hash=digest_token(raw_session),
             csrf_token_hash=digest_token(raw_csrf),
             user_id=user.id,
+            auth_method=auth_method,
             expires_at=expires_at,
             ip_address=request_ip(request, settings),
             user_agent=request.headers.get("user-agent", "")[:512] or None,
@@ -223,112 +308,15 @@ def _issue_session(
     return raw_session, raw_csrf, expires_at
 
 
-@router.get("/wecom/start")
-def wecom_start(
-    request: Request,
-    db: Db,
+def _set_browser_session_cookies(
+    response: Response,
     settings: Config,
-    next_path: str | None = Query(default=None, alias="next", max_length=512),
-) -> RedirectResponse:
-    _rate_limit_oauth_start(request_ip(request, settings) or "unknown")
-    raw_state = secrets.token_hex(32)
-    now = datetime.now(UTC)
-    db.execute(delete(OAuthState).where(OAuthState.expires_at < now))
-    db.execute(
-        delete(WebSession).where(WebSession.expires_at < now - timedelta(days=7))
+    raw_session: str,
+    raw_csrf: str,
+) -> None:
+    response.delete_cookie(
+        OAUTH_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
     )
-    db.add(
-        OAuthState(
-            state_hash=digest_token(raw_state),
-            next_path=safe_relative_path(next_path),
-            expires_at=now + timedelta(seconds=settings.oauth_state_seconds),
-        )
-    )
-    db.commit()
-    callback = f"{settings.public_base_url}/api/v1/auth/wecom/callback"
-    query = urlencode(
-        {
-            "appid": settings.wecom_corp_id,
-            "redirect_uri": callback,
-            "response_type": "code",
-            "scope": "snsapi_base",
-            "state": raw_state,
-            "agentid": settings.wecom_agent_id,
-        }
-    )
-    response = RedirectResponse(
-        f"https://open.weixin.qq.com/connect/oauth2/authorize?{query}#wechat_redirect",
-        status_code=302,
-    )
-    response.set_cookie(
-        OAUTH_COOKIE,
-        raw_state,
-        max_age=settings.oauth_state_seconds,
-        secure=True,
-        httponly=True,
-        samesite="lax",
-        path="/",
-    )
-    return response
-
-
-@router.get("/wecom/callback")
-async def wecom_callback(
-    request: Request,
-    db: Db,
-    settings: Config,
-    code: str = Query(min_length=1, max_length=512),
-    state: str = Query(min_length=20, max_length=256),
-) -> Response:
-    cookie_state = request.cookies.get(OAUTH_COOKIE)
-    if not cookie_state or not secrets.compare_digest(cookie_state, state):
-        return _wecom_error("登录请求校验失败，请重新发起登录。")
-    now = datetime.now(UTC)
-    state_hash = digest_token(state)
-    oauth_state = db.scalar(select(OAuthState).where(OAuthState.state_hash == state_hash))
-    if (
-        not oauth_state
-        or oauth_state.used_at is not None
-        or (oauth_state.expires_at.replace(tzinfo=UTC) if oauth_state.expires_at.tzinfo is None else oauth_state.expires_at) <= now
-    ):
-        return _wecom_error("登录请求已经过期或已被使用，请重新发起登录。")
-    consumed = db.execute(
-        update(OAuthState)
-        .where(OAuthState.id == oauth_state.id, OAuthState.used_at.is_(None))
-        .values(used_at=now)
-    )
-    db.commit()
-    if consumed.rowcount != 1:
-        return _wecom_error("登录请求已经被使用，请重新发起登录。")
-
-    try:
-        wecom_userid = await resolve_wecom_userid(code, settings)
-    except HTTPException as exc:
-        return _wecom_error(str(exc.detail), exc.status_code)
-    user = db.scalar(select(User).where(User.wecom_userid == wecom_userid))
-    if not user or not user.is_active:
-        add_audit(
-            db,
-            action="wecom.login.denied",
-            target_type="session",
-            target_name=wecom_userid,
-            success=False,
-            detail="member is not bound or is disabled",
-            request=request,
-            settings=settings,
-        )
-        db.commit()
-        return _wecom_error("当前企业微信成员尚未获得云舵访问权限。")
-
-    raw_session, raw_csrf, _ = _issue_session(
-        db=db,
-        settings=settings,
-        request=request,
-        user=user,
-        audit_action="wecom.login",
-    )
-    response = RedirectResponse(oauth_state.next_path, status_code=303)
-    response.delete_cookie(OAUTH_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     response.set_cookie(
         SESSION_COOKIE,
         raw_session,
@@ -347,6 +335,121 @@ async def wecom_callback(
         samesite="strict",
         path="/",
     )
+
+
+@router.get("/wecom/start")
+def wecom_start(
+    request: Request,
+    db: Db,
+    settings: Config,
+    next_path: str | None = Query(default=None, alias="next", max_length=512),
+) -> RedirectResponse:
+    _rate_limit_oauth_start(request_ip(request, settings) or "unknown")
+    raw_state = _new_oauth_state(
+        db,
+        settings,
+        provider="wecom_h5",
+        next_path=next_path,
+    )
+    callback = f"{settings.public_base_url}/api/v1/auth/wecom/callback"
+    query = urlencode(
+        {
+            "appid": settings.wecom_corp_id,
+            "redirect_uri": callback,
+            "response_type": "code",
+            "scope": "snsapi_base",
+            "state": raw_state,
+            "agentid": settings.wecom_agent_id,
+        }
+    )
+    response = RedirectResponse(
+        f"https://open.weixin.qq.com/connect/oauth2/authorize?{query}#wechat_redirect",
+        status_code=302,
+    )
+    _set_oauth_cookie(response, raw_state, settings)
+    return response
+
+
+@router.get("/wecom/qr/start")
+def wecom_qr_start(
+    request: Request,
+    db: Db,
+    settings: Config,
+    next_path: str | None = Query(default=None, alias="next", max_length=512),
+) -> RedirectResponse:
+    _rate_limit_oauth_start(request_ip(request, settings) or "unknown")
+    raw_state = _new_oauth_state(
+        db,
+        settings,
+        provider="wecom_qr",
+        next_path=next_path,
+    )
+    callback = f"{settings.public_base_url}/api/v1/auth/wecom/callback"
+    query = urlencode(
+        {
+            "login_type": "CorpApp",
+            "appid": settings.wecom_corp_id,
+            "agentid": settings.wecom_agent_id,
+            "redirect_uri": callback,
+            "state": raw_state,
+        }
+    )
+    response = RedirectResponse(
+        f"{settings.wecom_qr_authorize_url}?{query}", status_code=302
+    )
+    _set_oauth_cookie(response, raw_state, settings)
+    return response
+
+
+@router.get("/wecom/callback")
+async def wecom_callback(
+    request: Request,
+    db: Db,
+    settings: Config,
+    code: str = Query(min_length=1, max_length=512),
+    state: str = Query(min_length=20, max_length=256),
+) -> Response:
+    try:
+        oauth_state = _consume_oauth_state(
+            db, request, state, providers={"wecom_h5", "wecom_qr"}
+        )
+    except HTTPException as exc:
+        return _wecom_error(str(exc.detail), exc.status_code)
+
+    try:
+        wecom_userid = await resolve_wecom_userid(code, settings)
+    except HTTPException as exc:
+        return _wecom_error(str(exc.detail), exc.status_code)
+    user = db.scalar(select(User).where(User.wecom_userid == wecom_userid))
+    if not user or not user.is_active:
+        audit_prefix = "wecom.qr" if oauth_state.provider == "wecom_qr" else "wecom"
+        add_audit(
+            db,
+            action=f"{audit_prefix}.login.denied",
+            target_type="session",
+            target_name=wecom_userid,
+            success=False,
+            detail="member is not bound or is disabled",
+            request=request,
+            settings=settings,
+        )
+        db.commit()
+        return _wecom_error("当前企业微信成员尚未获得云舵访问权限。")
+
+    raw_session, raw_csrf, _ = _issue_session(
+        db=db,
+        settings=settings,
+        request=request,
+        user=user,
+        audit_action=(
+            "wecom.qr.login"
+            if oauth_state.provider == "wecom_qr"
+            else "wecom.login"
+        ),
+        auth_method=oauth_state.provider,
+    )
+    response = RedirectResponse(oauth_state.next_path, status_code=303)
+    _set_browser_session_cookies(response, settings, raw_session, raw_csrf)
     return response
 
 
@@ -395,6 +498,7 @@ async def wecom_miniprogram_login(
         request=request,
         user=user,
         audit_action="wecom.mini.login",
+        auth_method="wecom_mini",
     )
     expires_in = max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
     return {

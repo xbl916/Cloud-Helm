@@ -98,6 +98,235 @@ def test_business_service_report_and_instance_capacity(
     assert ignored.json()["monitored"] is False
 
 
+def test_gateway_discovery_adds_and_removes_only_eligible_endpoints(
+    client, admin_headers: dict[str, str]
+):
+    assert client.get("/api/v1/service-discovery/routes").status_code == 503
+    settings = get_settings().model_copy(
+        update={
+            "gateway_discovery_token": "test-gateway-discovery-token",
+            "gateway_discovery_allowed_cidrs": "10.10.0.0/16",
+        }
+    )
+    client.app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        created = client.post(
+            "/api/v1/scaling/services",
+            headers=admin_headers,
+            json=_payload(f"ASR-discovery-{uuid4()}"),
+        )
+        assert created.status_code == 201
+        service = created.json()
+        report_headers = {
+            "X-CloudHelm-Service-Token": service["report_token"]
+        }
+        discovery_headers = {
+            "X-CloudHelm-Gateway-Token": "test-gateway-discovery-token"
+        }
+
+        denied = client.get(
+            "/api/v1/service-discovery/routes",
+            headers={"X-CloudHelm-Gateway-Token": "wrong-token"},
+        )
+        assert denied.status_code == 401
+
+        invalid_endpoint = client.post(
+            f"/api/v1/service-metrics/{service['id']}/report",
+            headers=report_headers,
+            json={
+                "instance_id": "asr-local-invalid",
+                "pool": "local",
+                "active_businesses": 0,
+                "endpoint_host": "10.10.0.22",
+            },
+        )
+        assert invalid_endpoint.status_code == 422
+
+        outside_allowed_network = client.post(
+            f"/api/v1/service-metrics/{service['id']}/report",
+            headers=report_headers,
+            json={
+                "instance_id": "asr-local-outside",
+                "pool": "local",
+                "active_businesses": 0,
+                "endpoint_scheme": "http",
+                "endpoint_host": "192.168.50.20",
+                "endpoint_port": 9000,
+            },
+        )
+        assert outside_allowed_network.status_code == 422
+
+        reported = client.post(
+            f"/api/v1/service-metrics/{service['id']}/report",
+            headers=report_headers,
+            json={
+                "instance_id": "asr-local-1",
+                "pool": "local",
+                "active_businesses": 1,
+                "healthy": True,
+                "ready": True,
+                "accepting": True,
+                "endpoint_scheme": "http",
+                "endpoint_host": "10.10.0.21",
+                "endpoint_port": 9000,
+            },
+        )
+        assert reported.status_code == 200
+        assert reported.json()["endpoint_registered"] is True
+
+        discovered = client.get(
+            "/api/v1/service-discovery/routes", headers=discovery_headers
+        )
+        assert discovered.status_code == 200
+        route = next(
+            item
+            for item in discovered.json()["services"]
+            if item["service_id"] == service["id"]
+        )
+        assert len(route["endpoints"]) == 1
+        endpoint = route["endpoints"][0]
+        assert endpoint | {"expires_at": "ignored"} == {
+            "instance_id": "asr-local-1",
+            "pool": "local",
+            "scheme": "http",
+            "host": "10.10.0.21",
+            "port": 9000,
+            "url": "http://10.10.0.21:9000",
+            "expires_at": "ignored",
+        }
+        unchanged = client.get(
+            "/api/v1/service-discovery/routes",
+            headers={
+                **discovery_headers,
+                "If-None-Match": discovered.headers["etag"],
+            },
+        )
+        assert unchanged.status_code == 304
+
+        unhealthy = client.post(
+            f"/api/v1/service-metrics/{service['id']}/report",
+            headers=report_headers,
+            json={
+                "instance_id": "asr-local-1",
+                "pool": "local",
+                "active_businesses": 0,
+                "healthy": False,
+                "ready": False,
+                "accepting": False,
+            },
+        )
+        assert unhealthy.status_code == 200
+        changed = client.get(
+            "/api/v1/service-discovery/routes", headers=discovery_headers
+        )
+        route = next(
+            item
+            for item in changed.json()["services"]
+            if item["service_id"] == service["id"]
+        )
+        assert route["endpoints"] == []
+        assert changed.headers["etag"] != discovered.headers["etag"]
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+
+def test_local_discovery_prefers_manually_configured_node_address(
+    client, admin_headers: dict[str, str]
+):
+    settings = get_settings().model_copy(
+        update={
+            "gateway_discovery_token": "test-gateway-discovery-token",
+            "gateway_discovery_allowed_cidrs": "10.30.0.0/16",
+        }
+    )
+    client.app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        created = client.post(
+            "/api/v1/scaling/services",
+            headers=admin_headers,
+            json=_payload(f"VLM-node-address-{uuid4()}"),
+        )
+        service = created.json()
+        enrolled = client.post(
+            "/api/v1/agent/enroll",
+            json={
+                "enrollment_token": "test-agent-enrollment-token",
+                "agent_key": f"gateway-address-agent-{uuid4()}",
+                "name": "网关地址测试节点",
+                "hostname": "vlm-local-host",
+            },
+        )
+        credentials = enrolled.json()
+        heartbeat = client.post(
+            "/api/v1/agent/heartbeat",
+            headers={
+                "X-Node-Id": credentials["node_id"],
+                "X-Agent-Token": credentials["node_token"],
+            },
+            json={
+                "hostname": "vlm-local-host",
+                "containers": [
+                    {
+                        "docker_id": "gateway-local-container-1234",
+                        "name": "vlm-shared-image",
+                        "image": "example/vlm:shared",
+                        "status": "running",
+                        "labels": {
+                            "cloudhelm.service_id": service["id"],
+                            "cloudhelm.instance_id": "vlm-local-shared-1",
+                        },
+                    }
+                ],
+            },
+        )
+        assert heartbeat.status_code == 204
+
+        configured = client.put(
+            f"/api/v1/nodes/{credentials['node_id']}/gateway-address",
+            headers=admin_headers,
+            json={"gateway_address": "10.30.0.50"},
+        )
+        assert configured.status_code == 200
+        report = client.post(
+            f"/api/v1/service-metrics/{service['id']}/report",
+            headers={"X-CloudHelm-Service-Token": service["report_token"]},
+            json={
+                "instance_id": "vlm-local-shared-1",
+                "pool": "local",
+                "active_businesses": 0,
+                "healthy": True,
+                "ready": True,
+                "accepting": True,
+                "endpoint_scheme": "http",
+                "endpoint_port": 9000,
+            },
+        )
+        assert report.status_code == 200
+        assert report.json()["endpoint_registered"] is True
+
+        discovered = client.get(
+            "/api/v1/service-discovery/routes",
+            headers={
+                "X-CloudHelm-Gateway-Token": "test-gateway-discovery-token"
+            },
+        )
+        route = next(
+            item
+            for item in discovered.json()["services"]
+            if item["service_id"] == service["id"]
+        )
+        assert route["endpoints"][0]["host"] == "10.30.0.50"
+        assert route["endpoints"][0]["url"] == "http://10.30.0.50:9000"
+
+        nodes = client.get("/api/v1/nodes", headers=admin_headers)
+        node = next(
+            item for item in nodes.json() if item["id"] == credentials["node_id"]
+        )
+        assert node["gateway_address"] == "10.30.0.50"
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+
 def test_agent_labels_auto_bind_only_local_service_instances(
     client, admin_headers: dict[str, str]
 ):
@@ -131,7 +360,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
             "agent_key": f"auto-bind-agent-{uuid4()}",
             "name": "自动关联节点",
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.1",
+            "agent_version": "0.9.2",
         },
     )
     assert enrolled.status_code == 200
@@ -144,7 +373,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
         },
         json={
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.1",
+            "agent_version": "0.9.2",
             "containers": [
                 {
                     "docker_id": "local-auto-container-123456",

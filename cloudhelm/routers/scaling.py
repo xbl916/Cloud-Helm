@@ -1,9 +1,11 @@
+import ipaddress
 import json
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from cloudhelm.audit import add_audit
@@ -11,6 +13,7 @@ from cloudhelm.dependencies import Admin, Config, Db
 from cloudhelm.image_reference import parse_tagged_image, validate_tag_change
 from cloudhelm.models import (
     Container,
+    Node,
     ScalingEvent,
     ScalingService,
     ServiceInstance,
@@ -36,7 +39,7 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
-def _instance_out(instance: ServiceInstance, default_capacity: int) -> dict:
+def _instance_out(db: Db, instance: ServiceInstance, default_capacity: int) -> dict:
     return {
         "id": instance.id,
         "instance_id": instance.instance_id,
@@ -49,6 +52,10 @@ def _instance_out(instance: ServiceInstance, default_capacity: int) -> dict:
         "ready": instance.ready,
         "accepting": instance.accepting,
         "desired_state": instance.desired_state,
+        "endpoint_scheme": instance.endpoint_scheme,
+        "endpoint_host": _effective_endpoint_host(db, instance),
+        "reported_endpoint_host": instance.endpoint_host,
+        "endpoint_port": instance.endpoint_port,
         "monitored": instance.monitored,
         "updated_at": _iso(instance.updated_at),
     }
@@ -102,7 +109,7 @@ def _service_out(db: Db, service: ScalingService, include_instances: bool = True
             .order_by(ServiceInstance.pool, ServiceInstance.instance_id)
         ).all()
         result["instances"] = [
-            _instance_out(item, service.capacity_per_replica) for item in instances
+            _instance_out(db, item, service.capacity_per_replica) for item in instances
         ]
     return result
 
@@ -118,6 +125,7 @@ def report_business_load(
     service_id: str,
     payload: BusinessMetricReport,
     db: Db,
+    settings: Config,
     x_cloudhelm_service_token: Annotated[str | None, Header()] = None,
 ) -> dict:
     service = db.get(ScalingService, service_id)
@@ -134,6 +142,31 @@ def report_business_load(
             status_code=422,
             detail="ACS 实例没有主机 Agent，不能关联本地容器",
         )
+    if (
+        payload.pool == "acs"
+        and payload.endpoint_scheme is not None
+        and payload.endpoint_host is None
+    ):
+        raise HTTPException(status_code=422, detail="ACS 实例必须上报 Pod IP")
+    if payload.endpoint_host is not None:
+        address = ipaddress.ip_address(payload.endpoint_host)
+        if (
+            address.is_unspecified
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+        ):
+            raise HTTPException(status_code=422, detail="服务地址不可被网关安全路由")
+        if not settings.gateway_discovery_networks:
+            raise HTTPException(
+                status_code=422,
+                detail="服务端尚未配置网关可发布地址网段",
+            )
+        if not any(address in network for network in settings.gateway_discovery_networks):
+            raise HTTPException(
+                status_code=422,
+                detail="服务地址不在允许发布给网关的网段内",
+            )
     container = None
     if payload.container_id:
         container = db.get(Container, payload.container_id)
@@ -166,12 +199,16 @@ def report_business_load(
     instance.healthy = payload.healthy
     instance.ready = payload.ready
     instance.accepting = payload.accepting
+    instance.endpoint_scheme = payload.endpoint_scheme
+    instance.endpoint_host = payload.endpoint_host
+    instance.endpoint_port = payload.endpoint_port
     instance.metadata_json = json.dumps(
         payload.metadata, ensure_ascii=False, separators=(",", ":")
     )
     instance.updated_at = now
     service.last_report_at = now
     db.commit()
+    effective_host = _effective_endpoint_host(db, instance)
     return {
         "accepted": True,
         "service_id": service.id,
@@ -179,8 +216,143 @@ def report_business_load(
         "container_id": instance.container_id,
         "container_linked": instance.container_id is not None,
         "desired_state": instance.desired_state,
-        "report_after_seconds": 15,
+        "endpoint_registered": bool(
+            effective_host and instance.endpoint_scheme and instance.endpoint_port
+        ),
+        "report_after_seconds": max(
+            5, min(15, service.report_stale_seconds // 3)
+        ),
     }
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _discoverable_instance(
+    db: Db,
+    service: ScalingService,
+    instance: ServiceInstance,
+    now: datetime,
+    settings: Config,
+) -> bool:
+    host = _effective_endpoint_host(db, instance)
+    if (
+        not instance.monitored
+        or not instance.healthy
+        or not instance.ready
+        or not instance.accepting
+        or instance.desired_state != "serve"
+        or not instance.endpoint_scheme
+        or not host
+        or not instance.endpoint_port
+        or _aware(instance.updated_at)
+        < now - timedelta(seconds=service.report_stale_seconds)
+    ):
+        return False
+    address = ipaddress.ip_address(host)
+    if not any(address in network for network in settings.gateway_discovery_networks):
+        return False
+    if not instance.container_id:
+        return True
+    container = db.get(Container, instance.container_id)
+    return bool(
+        container
+        and container.present
+        and container.status == "running"
+        and container.health != "unhealthy"
+    )
+
+
+def _effective_endpoint_host(db: Db, instance: ServiceInstance) -> str | None:
+    if instance.pool == "local" and instance.container_id:
+        container = db.get(Container, instance.container_id)
+        node = db.get(Node, container.node_id) if container else None
+        if node and node.gateway_address:
+            return node.gateway_address
+    return instance.endpoint_host
+
+
+def _endpoint_url(instance: ServiceInstance, host: str) -> str:
+    formatted_host = f"[{host}]" if ":" in host else host
+    return f"{instance.endpoint_scheme}://{formatted_host}:{instance.endpoint_port}"
+
+
+@router.get("/service-discovery/routes")
+def discover_gateway_routes(
+    request: Request,
+    db: Db,
+    settings: Config,
+    x_cloudhelm_gateway_token: Annotated[str | None, Header()] = None,
+) -> Response:
+    if not settings.gateway_discovery_token:
+        raise HTTPException(status_code=503, detail="服务端尚未配置网关发现令牌")
+    if not secrets.compare_digest(
+        digest_token(x_cloudhelm_gateway_token or ""),
+        digest_token(settings.gateway_discovery_token),
+    ):
+        raise HTTPException(status_code=401, detail="网关发现凭据无效")
+
+    now = datetime.now(UTC)
+    services = list(db.scalars(select(ScalingService).order_by(ScalingService.name)))
+    routes = []
+    for service in services:
+        instances = db.scalars(
+            select(ServiceInstance)
+            .where(ServiceInstance.service_id == service.id)
+            .order_by(ServiceInstance.pool, ServiceInstance.instance_id)
+        ).all()
+        endpoints = []
+        for instance in instances:
+            if not _discoverable_instance(db, service, instance, now, settings):
+                continue
+            host = _effective_endpoint_host(db, instance)
+            if not host:
+                continue
+            endpoints.append(
+                {
+                "instance_id": instance.instance_id,
+                "pool": instance.pool,
+                "scheme": instance.endpoint_scheme,
+                "host": host,
+                "port": instance.endpoint_port,
+                "url": _endpoint_url(instance, host),
+                "expires_at": (
+                    _aware(instance.updated_at)
+                    + timedelta(seconds=service.report_stale_seconds)
+                ).isoformat(),
+                }
+            )
+        routes.append(
+            {
+                "service_id": service.id,
+                "service_name": service.name,
+                "service_type": service.service_type,
+                "endpoints": endpoints,
+            }
+        )
+
+    generation = digest_token(
+        json.dumps(routes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+    etag = f'"{generation}"'
+    headers = {
+        "ETag": etag,
+        "Cache-Control": "no-store",
+        "X-CloudHelm-Poll-After": "2",
+    }
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    return JSONResponse(
+        {
+            "generation": generation,
+            "generated_at": now.isoformat(),
+            "authoritative": True,
+            "poll_after_seconds": 2,
+            "services": routes,
+        },
+        headers=headers,
+    )
 
 
 @router.get("/scaling/services")
@@ -449,7 +621,7 @@ def update_instance_capacity(
         settings=settings,
     )
     db.commit()
-    return _instance_out(instance, service.capacity_per_replica)
+    return _instance_out(db, instance, service.capacity_per_replica)
 
 
 @router.put("/scaling/instances/{instance_id}/monitoring")
@@ -483,7 +655,7 @@ def update_instance_monitoring(
         settings=settings,
     )
     db.commit()
-    return _instance_out(instance, service.capacity_per_replica)
+    return _instance_out(db, instance, service.capacity_per_replica)
 
 
 @router.get("/scaling/events")

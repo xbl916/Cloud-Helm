@@ -7,10 +7,10 @@
     <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/app.css?v=0.9.1" />
-    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.9.1" />
-    <link rel="stylesheet" href="/assets/gpu.css?v=0.9.1" />
-    <link rel="stylesheet" href="/assets/scaling.css?v=0.9.1" />
+    <link rel="stylesheet" href="/assets/app.css?v=0.9.2" />
+    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.9.2" />
+    <link rel="stylesheet" href="/assets/gpu.css?v=0.9.2" />
+    <link rel="stylesheet" href="/assets/scaling.css?v=0.9.2" />
     <title>云舵 Cloud Helm</title>
   </head>
   <body>
@@ -26,7 +26,7 @@
         </div>
         <p class="eyebrow">CONTAINER FLEET CONSOLE</p>
         <h1>把每一台节点，<br />握在掌心。</h1>
-        <p class="login-copy">面向企业微信 H5 的轻量容器运维控制台。</p>
+        <p class="login-copy">支持企业微信内授权与 PC 安全扫码登录。</p>
         <form id="login-form">
           <button class="primary-button" type="submit"><span>使用企业微信登录</span><span aria-hidden="true">→</span></button>
           <p id="login-error" class="form-error"></p>
@@ -88,7 +88,7 @@
           <div class="settings-card">
             <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
             <div><span>节点通信</span><strong>独立令牌</strong></div>
-            <div><span>版本</span><strong>Cloud Helm 0.9.1</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.9.2</strong></div>
           </div>
           <section id="admin-users" class="admin-users hidden">
             <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
@@ -192,13 +192,14 @@
           <label>故障兜底副本数<input name="failover_replicas" type="number" min="1" value="1" /></label>
           <label>扩容 / 缩容阈值 (%)<div class="split-input"><input name="scale_up_threshold_percent" type="number" min="1" max="100" value="70" /><input name="scale_down_threshold_percent" type="number" min="0" max="99" value="40" /></div></label>
           <label>统计窗口 / 冷却时间 (秒)<div class="split-input"><input name="window_seconds" type="number" min="60" value="300" /><input name="cooldown_seconds" type="number" min="30" value="300" /></div></label>
+          <label>实例上报失效时间 (秒)<input name="report_stale_seconds" type="number" min="15" max="3600" value="60" /></label>
           <label class="scaling-checkbox"><input name="autoscaling_enabled" type="checkbox" /> 创建后启用自动扩缩容</label>
           <p id="scaling-form-error" class="form-error"></p>
           <button class="primary-button" type="submit"><span>创建服务并生成上报令牌</span><span>→</span></button>
         </div>
-        <div id="scaling-token-result" class="scaling-token-result hidden"><strong>业务上报令牌（仅显示一次）</strong><p>请立即保存到本地与 ACS 服务的 Secret 中。</p><code></code><button type="button" data-close-scaling class="primary-small">我已保存</button></div>
+        <div id="scaling-token-result" class="scaling-token-result hidden"><strong>服务 ID</strong><code id="scaling-service-id-result"></code><strong>业务上报令牌（仅显示一次）</strong><p>请立即保存到本地与 ACS 服务的 Secret 中；本地与 ACS 的同一服务共用这组值。</p><code id="scaling-token-value"></code><button type="button" data-close-scaling class="primary-small">我已保存</button></div>
       </form>
     </div>
-    <script src="/assets/app.js?v=0.9.1" defer></script>
+    <script src="/assets/app.js?v=0.9.2" defer></script>
   </body>
 </html>

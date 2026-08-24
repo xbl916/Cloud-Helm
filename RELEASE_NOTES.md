@@ -1,6 +1,17 @@
-# Cloud Helm 0.9.1
+# Cloud Helm 0.9.2
 
-- 本地 AI 容器可通过 `cloudhelm.service_id`、`cloudhelm.instance_id` 标签自动关联 Agent 容器状态与业务上报；ACS 实例明确禁止关联本地主机容器。
+## 企业微信登录
+
+- PC 浏览器新增企业微信扫码登录，沿用企业自建应用 CorpID、AgentId 和 Secret；企业微信内置浏览器继续使用 H5 OAuth。
+- 不接入普通微信登录，扫码返回的企微 `UserId` 必须已存在且启用，否则拒绝登录。
+- OAuth 状态按 `wecom_h5`、`wecom_qr`、`wecom_mini` 隔离且只能消费一次，登录方式写入会话和审计。
+
+## 业务上报与统一网关
+
+- VLM、TTS、ASR、LLM 实例可上报协议、IP 和端口；本地与 ACS 可使用同一个镜像、`service_id` 和服务专属上报令牌。
+- 本地 AI 容器通过 `cloudhelm.service_id`、`cloudhelm.instance_id` 标签自动关联 Agent 容器状态；ACS 实例明确禁止关联本地主机容器。
+- 节点可手工配置统一网关实际访问 IP；配置后，该节点所属本地实例使用该 IP 和各自上报端口发布路由。
+- 统一网关使用独立只读令牌拉取全量权威路由，支持 ETag/304、地址网段白名单和实例过期时间；异常、未就绪、排空或失联实例会被移除。
 
 ## 模块镜像与严格串行发布
 
@@ -22,19 +33,21 @@
 
 ## 数据与安全
 
-- 新增 `0008_hybrid_cloud_autoscaling` 和 `0009_module_image_releases` 迁移；SQLite 升级前创建 `cloudhelm.db.pre-0.9.1.bak` 一致性备份。
+- 新增 `0010_pc_qr_logins`、`0011_gateway_service_discovery` 和 `0012_node_gateway_address`；从 0.8.1 升级会依次执行 `0008` 至 `0012`，SQLite 升级前创建 `cloudhelm.db.pre-0.9.2.bak` 一致性备份。
 - 业务上报令牌只显示一次，Server 只保存 SHA-256 摘要；可在管理台轮换。
+- 生产部署建议把业务上报令牌作为只读 Secret 文件挂载；文件本身仍是明文，必须核对容器 UID/GID 可读性并纳入宿主机 Secret 管理，不建议放入 `.env`。
 - ACS API 地址和凭据只从 Server 环境或只读 Secret 文件读取，不进入数据库和前端；TLS 校验不能关闭。
+- 网关发现令牌与 Agent、业务上报令牌相互独立；发布地址必须位于显式配置的允许网段。
 - 自动扩缩容全局开关默认关闭，升级不会自动创建或改变任何 ACS 资源。
 
 ## 兼容性
 
-- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.1 Agent。
+- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.2 Agent。
 - SQLite 与 PostgreSQL 均支持新表；既有用户、权限、节点、容器、指标、告警和审计数据原样保留。
-- `cloudhelm-0.9.1.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
-- `ghcr.io/xbl916/cloud-helm-server:0.9.1`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.1`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
+- `cloudhelm-0.9.2.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
+- `ghcr.io/xbl916/cloud-helm-server:0.9.2`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.2`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
 
 发布产物不包含 `.env`、ACS Token/CA、企微 Secret、数据库、自动备份、Agent 注册令牌或节点身份文件。
 
-全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.1.md`。
+全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.2.md`。

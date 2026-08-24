@@ -1,3 +1,4 @@
+import ipaddress
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -42,6 +43,7 @@ from cloudhelm.schemas import (
     AccessRuleInput,
     ActionRequest,
     AlertRuleInput,
+    NodeGatewayAddressInput,
     TaskOut,
     UserCreate,
     UserUpdate,
@@ -232,6 +234,9 @@ def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
                 "name": node.name,
                 "hostname": node.hostname,
                 "environment": node.environment,
+                "gateway_address": node.gateway_address
+                if user.role == UserRole.admin
+                else None,
                 "online": _node_online(node, settings.node_offline_seconds),
                 "last_seen_at": _iso(node.last_seen_at),
                 "agent_version": node.agent_version,
@@ -285,6 +290,42 @@ def list_containers(node_id: str, db: Db, user: CurrentUser) -> list[dict]:
         {**_container_dict(item), "business_loads": _container_business_loads(db, item.id)}
         for item in visible
     ]
+
+
+@router.put("/nodes/{node_id}/gateway-address")
+def update_node_gateway_address(
+    node_id: str,
+    payload: NodeGatewayAddressInput,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> dict:
+    node = db.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    if payload.gateway_address and settings.gateway_discovery_networks:
+        address = ipaddress.ip_address(payload.gateway_address)
+        if not any(address in network for network in settings.gateway_discovery_networks):
+            raise HTTPException(
+                status_code=422,
+                detail="节点网关访问 IP 不在允许发布的网段内",
+            )
+    previous = node.gateway_address
+    node.gateway_address = payload.gateway_address
+    add_audit(
+        db,
+        action="node.gateway_address.update",
+        target_type="node",
+        target_id=node.id,
+        target_name=node.name,
+        user=admin,
+        detail=f"gateway_address={previous or '-'}->{node.gateway_address or '-'}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return {"node_id": node.id, "gateway_address": node.gateway_address}
 
 
 @router.post("/nodes/{node_id}/gpu-baseline/reset")

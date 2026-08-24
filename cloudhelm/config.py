@@ -1,3 +1,4 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,6 +30,13 @@ class Settings(BaseSettings):
     oauth_state_seconds: int = Field(default=300, ge=60, le=600)
     wecom_api_timeout_seconds: float = Field(default=8.0, ge=2, le=30)
     wecom_api_base: str = "https://qyapi.weixin.qq.com"
+    wecom_qr_authorize_url: str = (
+        "https://login.work.weixin.qq.com/wwlogin/sso/login"
+    )
+    gateway_discovery_token: str | None = Field(
+        default=None, min_length=16, max_length=512
+    )
+    gateway_discovery_allowed_cidrs: str = ""
     trust_proxy_headers: bool = False
     static_dir: Path = Path(__file__).parent / "static"
     max_task_result_bytes: int = Field(default=262144, ge=4096, le=2097152)
@@ -54,14 +62,21 @@ class Settings(BaseSettings):
     image_release_timeout_seconds: int = Field(default=3600, ge=300, le=86400)
 
     @field_validator(
-        "agent_enrollment_token", "wecom_secret", "wecom_miniprogram_secret"
+        "agent_enrollment_token",
+        "wecom_secret",
+        "wecom_miniprogram_secret",
+        "gateway_discovery_token",
     )
     @classmethod
     def reject_example_secrets(cls, value: str | None) -> str | None:
         if value is None:
             return value
         lowered = value.lower()
-        if "change-me" in lowered or "replace-me" in lowered:
+        if (
+            "change-me" in lowered
+            or "replace-me" in lowered
+            or "replace_me" in lowered
+        ):
             raise ValueError("example secrets must be replaced")
         return value
 
@@ -90,12 +105,43 @@ class Settings(BaseSettings):
             raise ValueError("example public_base_url must be replaced")
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("public_base_url must use HTTP or HTTPS")
+        for name, url in {
+            "wecom_qr_authorize_url": self.wecom_qr_authorize_url,
+        }.items():
+            candidate = urlsplit(url)
+            if not candidate.hostname or candidate.scheme not in {"http", "https"}:
+                raise ValueError(f"{name} must be an absolute HTTP(S) URL")
+            if self.environment == "production" and candidate.scheme != "https":
+                raise ValueError(f"{name} must use HTTPS in production")
+        cidrs = [
+            item.strip()
+            for item in self.gateway_discovery_allowed_cidrs.split(",")
+            if item.strip()
+        ]
+        if self.gateway_discovery_token and not cidrs:
+            raise ValueError(
+                "gateway_discovery_allowed_cidrs is required when gateway discovery is enabled"
+            )
+        try:
+            for cidr in cidrs:
+                ipaddress.ip_network(cidr, strict=False)
+        except ValueError as exc:
+            raise ValueError("gateway_discovery_allowed_cidrs contains invalid CIDR") from exc
         return self
 
     @property
     def public_host(self) -> str:
         return urlsplit(self.public_base_url).hostname or ""
 
+    @property
+    def gateway_discovery_networks(
+        self,
+    ) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        return tuple(
+            ipaddress.ip_network(item.strip(), strict=False)
+            for item in self.gateway_discovery_allowed_cidrs.split(",")
+            if item.strip()
+        )
 
 @lru_cache
 def get_settings() -> Settings:

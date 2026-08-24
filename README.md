@@ -1,14 +1,14 @@
 # 云舵 Cloud Helm
 
-云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
+云舵是面向企业微信 H5、PC 企业微信扫码和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.9.1`。在本地常驻 + ACS 突发弹性的基础上，新增模块期望镜像和分阶段发布：ACS 先滚动到新版本，本地 GPU 容器再严格逐个替换，每个实例恢复业务健康上报后才继续下一个；Compose 重新启动旧 Tag 时会按期望版本自动纠正。本地实例可通过 `cloudhelm.service_id`、`cloudhelm.instance_id` 容器标签与 Agent 状态自动关联，ACS 实例保持无主机 Agent 的独立实例池。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级，不会清空既有数据。
+当前版本为 `0.9.2`。本地与 ACS 实例可直接上报业务负载和可达端点，本地实例通过容器标签与 Agent 自动关联；统一网关使用独立只读令牌获取健康路由，并可由节点手工网关 IP 覆盖本地上报地址。PC 浏览器只支持企业微信扫码，不接入普通微信。模块镜像继续按“ACS 就绪后、本地严格逐个替换并验证”的顺序发布。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级，不会清空既有数据。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
-- [0.9.1 全新部署与 0.8.1 升级](docs/deploy-and-upgrade-0.9.1.md)
+- [0.9.2 全新部署与 0.8.1 升级](docs/deploy-and-upgrade-0.9.2.md)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [监控告警与企业微信通知](#监控告警与企业微信通知)
 - [本地常驻与阿里云 ACS 弹性](docs/hybrid-autoscaling.md)
@@ -23,7 +23,7 @@
 
 ```text
 企业微信成员
-  │ H5 OAuth 或小程序 wx.qy.login（确认人员身份）
+  │ H5 OAuth、PC 企微扫码或小程序 wx.qy.login（确认人员身份）
   ▼
 Cloud Helm Server
   │ 服务端短期会话 + CSRF/Origin 校验
@@ -45,7 +45,7 @@ Docker Engine
 - 每个 Agent 使用独立令牌，只接受日志、启动、停止、重启和同仓库换 Tag 五类任务。
 - 服务端不向 Agent 发送任意命令；镜像更新仅全局管理员或对应资源管理员可发起，Server 与 Agent 都会校验新旧仓库一致。系统不支持删除容器、任意指定仓库、任意修改挂载或执行 Shell。
 
-企微授权地址和成员身份接口依据[企业微信官方网页授权文档](https://developer.work.weixin.qq.com/document/path/91022)和[获取访问用户身份文档](https://developer.work.weixin.qq.com/document/path/91023)实现。
+企微授权地址和成员身份接口依据[企业微信官方网页授权文档](https://developer.work.weixin.qq.com/document/path/91022)、[企业微信网页登录](https://developer.work.weixin.qq.com/document/path/98152)和[获取访问用户身份文档](https://developer.work.weixin.qq.com/document/path/91023)实现。普通浏览器使用企微扫码入口，企业微信内置浏览器继续使用 H5 授权；项目不接入普通微信登录。
 
 ## 详细部署手册
 
@@ -97,15 +97,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.9.1.tar.gz.sha256
-tar -xzf cloudhelm-0.9.1.tar.gz
-cd cloudhelm-0.9.1
+sha256sum -c cloudhelm-0.9.2.tar.gz.sha256
+tar -xzf cloudhelm-0.9.2.tar.gz
+cd cloudhelm-0.9.2
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.9.1.tar.gz: OK
+cloudhelm-0.9.2.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -139,6 +139,8 @@ getent hosts ops.company.com
 
 6. 从企业微信通讯录确认首位管理员的 `UserId`。
 
+PC 浏览器会自动使用同一个自建应用发起企业微信二维码登录，回调仍为 `https://ops.company.com/api/v1/auth/wecom/callback`，不需要微信开放平台网站应用或普通微信凭据。
+
 `UserId` 不是姓名、手机号、邮箱或页面显示昵称，大小写也应保持一致。应用主页域名、可信域名和后面的 `CLOUDHELM_PUBLIC_BASE_URL` 必须完全一致。`Secret` 只能写入管理中心服务器，不得发送给浏览器、Agent，也不要粘贴到聊天或工单中。
 
 企微授权流程依据[构造网页授权链接](https://developer.work.weixin.qq.com/document/path/91022)和[获取访问用户身份](https://developer.work.weixin.qq.com/document/path/91023)实现。
@@ -167,6 +169,8 @@ CLOUDHELM_WECOM_SECRET=应用的Secret
 # CLOUDHELM_WECOM_MINIPROGRAM_SECRET=关联小程序在当前企业下的Secret
 CLOUDHELM_WECOM_API_TIMEOUT_SECONDS=8
 CLOUDHELM_WECOM_API_BASE=https://qyapi.weixin.qq.com
+# CLOUDHELM_GATEWAY_DISCOVERY_TOKEN=另一个openssl生成的随机值
+# CLOUDHELM_GATEWAY_DISCOVERY_ALLOWED_CIDRS=10.0.0.0/8,fd00::/8
 CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID=首位管理员的企微UserId
 CLOUDHELM_BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 CLOUDHELM_DATABASE_URL=sqlite:////data/cloudhelm.db
@@ -208,6 +212,8 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_WECOM_MINIPROGRAM_SECRET`|关联小程序在当前企业下的 Secret|仅启用小程序时填写；只保存于 Server，不是微信小程序 AppSecret|
 |`CLOUDHELM_WECOM_API_TIMEOUT_SECONDS`|调用企微 API 的单次超时秒数|默认 8，可设 2–30|
 |`CLOUDHELM_WECOM_API_BASE`|企微 API 根地址|保持官方地址 `https://qyapi.weixin.qq.com`|
+|`CLOUDHELM_GATEWAY_DISCOVERY_TOKEN`|统一网关读取健康服务地址的只读令牌|至少 32 字节随机值；不得与 Agent 注册或业务上报令牌复用|
+|`CLOUDHELM_GATEWAY_DISCOVERY_ALLOWED_CIDRS`|允许实例发布给网关的 IP 网段，逗号分隔|启用发现令牌时必填；只写本地服务网段和 ACS Pod 网段|
 |`CLOUDHELM_BOOTSTRAP_ADMIN_WECOM_USERID`|首次创建的管理员身份|填写准确企微 `UserId`|
 |`CLOUDHELM_BOOTSTRAP_ADMIN_DISPLAY_NAME`|首次创建的管理员显示名称|默认 `系统管理员`，最长 120 字符|
 |`CLOUDHELM_DATABASE_URL`|服务端数据库连接地址|单机初始部署保持 `sqlite:////data/cloudhelm.db`|
@@ -352,7 +358,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.9.1/deploy
+cd cloudhelm-0.9.2/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -793,20 +799,20 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.8.1 原地升级到 0.9.1
+## 从 0.8.1 原地升级到 0.9.2
 
-0.9.1 在 0.8.1 基础上创建混合云业务负载、实例、历史采样和伸缩事件表，并增加模块期望镜像、ACS 目标容器和分阶段发布状态字段，写入 `0008_hybrid_cloud_autoscaling`、`0009_module_image_releases` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
+0.9.2 在 0.8.1 基础上创建混合云业务负载、实例、历史采样和伸缩事件表，增加模块期望镜像、企微 PC 扫码来源、服务发现端点和节点网关访问 IP，写入 `0008_hybrid_cloud_autoscaling` 至 `0012_node_gateway_address` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
 
-SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.9.1.bak` 一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [0.9.1 全新部署与 0.8.1 升级手册](docs/deploy-and-upgrade-0.9.1.md)。
+SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.9.2.bak` 一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [0.9.2 全新部署与 0.8.1 升级手册](docs/deploy-and-upgrade-0.9.2.md)。
 
 先在 `0.8.1` 部署目录停止 Server 并制作一致性备份：
 
 ```bash
 cd /实际路径/cloudhelm-0.8.1
 docker compose stop server
-sudo tar -czf ../cloudhelm-0.8.1-before-0.9.1.tar.gz -C cloudhelm-data .
-chmod 600 ../cloudhelm-0.8.1-before-0.9.1.tar.gz
-test -s ../cloudhelm-0.8.1-before-0.9.1.tar.gz
+sudo tar -czf ../cloudhelm-0.8.1-before-0.9.2.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-0.8.1-before-0.9.2.tar.gz
+test -s ../cloudhelm-0.8.1-before-0.9.2.tar.gz
 ```
 
 解压新版发布包后，把其中的 `docker-compose.yml` 复制到现有部署目录。保留现有 `.env` 和 `cloudhelm-data`，不要用示例文件覆盖它们：
@@ -821,7 +827,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-业务负载由各 AI 服务直接上报。使用容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 0.9.1，以便上报关联标签、等待 Docker 健康检查并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
+业务负载由各 AI 服务直接上报。使用容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 0.9.2，以便上报关联标签、等待 Docker 健康检查并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
 
 每台 Agent 节点复制新版 `deploy/agent.compose.yml`；GPU 节点继续叠加原有 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -939,7 +945,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.9.1
+bash scripts/package-release.sh 0.9.2
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -947,11 +953,11 @@ bash scripts/package-release.sh 0.9.1
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.9.1
-git push origin v0.9.1
+git tag v0.9.2
+git push origin v0.9.2
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.9.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.9.2`
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.2`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v0.9.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v0.9.2` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
