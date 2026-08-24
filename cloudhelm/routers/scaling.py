@@ -699,6 +699,48 @@ def update_instance_monitoring(
     return _instance_out(db, instance, service.capacity_per_replica)
 
 
+@router.delete(
+    "/scaling/instances/{instance_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_service_instance(
+    instance_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    admin: Admin,
+) -> Response:
+    instance = db.get(ServiceInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="服务实例不存在")
+    service = db.get(ScalingService, instance.service_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    if service.release_status in ACTIVE_RELEASE_STATUSES:
+        raise HTTPException(status_code=409, detail="镜像正在分阶段发布，不能删除实例")
+    if instance.container_id:
+        raise HTTPException(
+            status_code=409,
+            detail="该实例仍关联本地容器；请先修正或移除容器关联标签",
+        )
+    add_audit(
+        db,
+        action="scaling.instance.delete",
+        target_type="scaling_service",
+        target_id=service.id,
+        target_name=f"{service.name}/{instance.instance_id}",
+        user=admin,
+        detail=(
+            f"instance_id={instance.instance_id},pool={instance.pool},"
+            f"active_businesses={instance.active_businesses}"
+        ),
+        request=request,
+        settings=settings,
+    )
+    db.delete(instance)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/scaling/events")
 def list_scaling_events(db: Db, admin: Admin, limit: int = 100) -> list[dict]:
     limit = min(500, max(1, limit))

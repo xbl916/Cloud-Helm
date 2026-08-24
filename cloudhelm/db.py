@@ -171,6 +171,16 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
             "0012_node_gateway_address",
             {"nodes": {"gateway_address": "VARCHAR(45)"}},
         ),
+        (
+            "0013_node_business_history",
+            {
+                "metric_samples": {
+                    "active_businesses": "INTEGER NOT NULL DEFAULT 0",
+                    "business_capacity": "INTEGER NOT NULL DEFAULT 0",
+                    "business_instances": "INTEGER NOT NULL DEFAULT 0",
+                }
+            },
+        ),
     ]
 
 

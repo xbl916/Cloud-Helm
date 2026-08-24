@@ -97,6 +97,16 @@ def test_business_service_report_and_instance_capacity(
     assert ignored.status_code == 200
     assert ignored.json()["monitored"] is False
 
+    deleted = client.delete(
+        f"/api/v1/scaling/instances/{instance['id']}", headers=admin_headers
+    )
+    assert deleted.status_code == 204
+    listed_after_delete = client.get("/api/v1/scaling/services")
+    target_after_delete = next(
+        item for item in listed_after_delete.json() if item["id"] == service["id"]
+    )
+    assert target_after_delete["instances"] == []
+
 
 def test_heterogeneous_instance_capacities_drive_service_utilization():
     now = datetime.now(UTC)
@@ -411,7 +421,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
             "agent_key": f"auto-bind-agent-{uuid4()}",
             "name": "自动关联节点",
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.4",
+            "agent_version": "0.9.5",
         },
     )
     assert enrolled.status_code == 200
@@ -424,7 +434,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
         },
         json={
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.4",
+            "agent_version": "0.9.5",
             "gpu_status": "ok",
             "gpus": [
                 {
@@ -502,6 +512,12 @@ def test_agent_labels_auto_bind_only_local_service_instances(
     assert local_out["container_name"] == "vlm-local-auto"
     assert local_out["gpu_devices"] == ["0"]
     assert local_out["gpu_names"] == ["NVIDIA L40S"]
+
+    linked_delete = client.delete(
+        f"/api/v1/scaling/instances/{local_out['id']}", headers=admin_headers
+    )
+    assert linked_delete.status_code == 409
+    assert "仍关联本地容器" in linked_delete.json()["detail"]
 
     rejected = client.post(
         f"/api/v1/service-metrics/{service['id']}/report",

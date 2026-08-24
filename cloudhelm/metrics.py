@@ -4,7 +4,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from cloudhelm.config import Settings
-from cloudhelm.models import Container, MetricSample, Node
+from cloudhelm.models import (
+    Container,
+    MetricSample,
+    Node,
+    ScalingService,
+    ServiceInstance,
+)
 from cloudhelm.schemas import HeartbeatRequest
 
 
@@ -29,6 +35,27 @@ def record_metric_history(
 
     node.metrics_history_at = now
     system = payload.system_metrics
+    container_ids = [item.id for item in containers]
+    business_rows = (
+        list(
+            db.execute(
+                select(ServiceInstance, ScalingService)
+                .join(
+                    ScalingService,
+                    ScalingService.id == ServiceInstance.service_id,
+                )
+                .where(ServiceInstance.container_id.in_(container_ids))
+            ).all()
+        )
+        if container_ids
+        else []
+    )
+    active_businesses = sum(instance.active_businesses for instance, _ in business_rows)
+    business_capacity = sum(
+        instance.capacity_limit or service.capacity_per_replica
+        for instance, service in business_rows
+        if instance.healthy and instance.ready and instance.accepting
+    )
     db.add(
         MetricSample(
             target_type="node",
@@ -42,6 +69,9 @@ def record_metric_history(
             network_tx_bps=system.network_tx_bps,
             disk_used_bytes=system.disk_used_bytes,
             disk_total_bytes=system.disk_total_bytes,
+            active_businesses=active_businesses,
+            business_capacity=business_capacity,
+            business_instances=len(business_rows),
         )
     )
     for item in containers:
@@ -68,7 +98,9 @@ def record_metric_history(
 
     retention_cutoff = now - timedelta(hours=settings.metrics_history_retention_hours)
     db.execute(
-        delete(MetricSample).where(MetricSample.sampled_at < retention_cutoff)
+        delete(MetricSample)
+        .where(MetricSample.sampled_at < retention_cutoff)
+        .execution_options(synchronize_session=False)
     )
     boundary = db.scalar(
         select(MetricSample.id)
@@ -77,4 +109,8 @@ def record_metric_history(
         .limit(1)
     )
     if boundary is not None:
-        db.execute(delete(MetricSample).where(MetricSample.id < boundary))
+        db.execute(
+            delete(MetricSample)
+            .where(MetricSample.id < boundary)
+            .execution_options(synchronize_session=False)
+        )

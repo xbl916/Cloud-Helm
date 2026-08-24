@@ -268,6 +268,9 @@ class MetricSample(Base):
     block_write_bps: Mapped[float] = mapped_column(Float, default=0.0)
     pids: Mapped[int] = mapped_column(Integer, default=0)
     restart_count: Mapped[int] = mapped_column(Integer, default=0)
+    active_businesses: Mapped[int] = mapped_column(Integer, default=0)
+    business_capacity: Mapped[int] = mapped_column(Integer, default=0)
+    business_instances: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AlertRule(Base):

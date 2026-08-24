@@ -38,6 +38,14 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "gateway_address",
     }.issubset(node_columns)
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
+    metric_columns = {
+        item["name"] for item in inspector.get_columns("metric_samples")
+    }
+    assert {
+        "active_businesses",
+        "business_capacity",
+        "business_instances",
+    }.issubset(metric_columns)
     access_rule_columns = {
         item["name"] for item in inspector.get_columns("access_rules")
     }
@@ -147,7 +155,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.connect() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 12
+        ).scalar_one() == 13
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
@@ -227,6 +235,26 @@ def test_initialize_database_adds_node_gateway_address(tmp_path):
 
     columns = {item["name"] for item in inspect(legacy_engine).get_columns("nodes")}
     assert "gateway_address" in columns
+
+
+def test_initialize_database_adds_node_business_history_columns(tmp_path):
+    database = tmp_path / "cloudhelm-before-business-history.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE metric_samples (id INTEGER PRIMARY KEY)")
+        )
+
+    initialize_database(legacy_engine)
+
+    columns = {
+        item["name"] for item in inspect(legacy_engine).get_columns("metric_samples")
+    }
+    assert {
+        "active_businesses",
+        "business_capacity",
+        "business_instances",
+    }.issubset(columns)
 
 
 def test_sqlite_backup_is_created_before_schema_changes(tmp_path):

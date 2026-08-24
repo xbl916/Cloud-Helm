@@ -203,6 +203,8 @@ def test_agent_inventory_and_task_flow(
     )
     assert node_history.status_code == 200
     assert node_history.json()[0]["cpu_percent"] == 36.5
+    assert node_history.json()[0]["active_businesses"] == 0
+    assert node_history.json()[0]["business_capacity"] == 0
     container_history = client.get(
         f"/api/v1/containers/{container['id']}/metrics/history",
         headers=admin_headers,

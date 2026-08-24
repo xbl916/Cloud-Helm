@@ -490,6 +490,9 @@ def _history(
             "block_write_bps": round(item.block_write_bps, 2),
             "pids": item.pids,
             "restart_count": item.restart_count,
+            "active_businesses": item.active_businesses,
+            "business_capacity": item.business_capacity,
+            "business_instances": item.business_instances,
         }
         for item in reversed(samples)
     ]

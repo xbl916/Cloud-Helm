@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 from cloudhelm.config import Settings, get_settings
 from cloudhelm.db import Base
 from cloudhelm.metrics import record_metric_history
-from cloudhelm.models import Container, MetricSample, Node
+from cloudhelm.models import (
+    Container,
+    MetricSample,
+    Node,
+    ScalingService,
+    ServiceInstance,
+)
 from cloudhelm.schemas import HeartbeatRequest
 
 
@@ -51,11 +57,39 @@ def test_metric_history_retention_and_hard_row_cap(tmp_path):
         )
         db.add(container)
         db.flush()
+        service = ScalingService(
+            name="历史业务服务",
+            service_type="vlm",
+            report_token_hash="hash",
+            capacity_per_replica=10,
+            workload_name="history-vlm",
+        )
+        db.add(service)
+        db.flush()
+        db.add(
+            ServiceInstance(
+                service_id=service.id,
+                instance_id="history-vlm-1",
+                container_id=container.id,
+                active_businesses=7,
+                capacity_limit=16,
+            )
+        )
+        db.flush()
         for offset in (0, 60, 120):
             now = start + timedelta(seconds=offset)
             record_metric_history(db, node, [container], payload, now, settings)
             db.commit()
         assert db.scalar(select(func.count()).select_from(MetricSample)) == 4
+        node_sample = db.scalar(
+            select(MetricSample)
+            .where(MetricSample.target_type == "node")
+            .order_by(MetricSample.sampled_at.desc())
+        )
+        assert node_sample is not None
+        assert node_sample.active_businesses == 7
+        assert node_sample.business_capacity == 16
+        assert node_sample.business_instances == 1
 
         record_metric_history(
             db, node, [container], payload, start + timedelta(hours=2), settings
