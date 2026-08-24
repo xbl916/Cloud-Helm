@@ -1,0 +1,89 @@
+/* Module-level desktop refinements. Core shell rules live in app.css. */
+@media (min-width: 960px) {
+  .alert-event-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 11px;
+  }
+
+  .alert-event { min-height: 92px; padding: 16px; }
+  .alert-event strong { font-size: 12px; }
+  .alert-event span { font-size: 11px; line-height: 1.5; }
+  .alert-event small, .alert-event b { font-size: 9px; }
+
+  .alert-rule {
+    grid-template-columns: minmax(210px, 1.6fr) 110px 90px 68px 68px minmax(120px, auto);
+    padding: 15px;
+    gap: 11px;
+  }
+
+  .alert-rule-title strong { font-size: 13px; }
+  .alert-rule-title span, .alert-rule label { font-size: 9px; }
+  .alert-rule input[type="number"] { padding: 9px; }
+  .alert-rule button { padding: 9px 12px; font-size: 10px; }
+
+  .gpu-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .gpu-card { padding: 20px; border-radius: 18px; }
+  .gpu-card-head strong { font-size: 14px; }
+  .gpu-card-head span { font-size: 9px; }
+  .gpu-primary strong { font-size: 19px; }
+  .gpu-primary span, .gpu-secondary span { font-size: 9px; }
+  .gpu-secondary strong { font-size: 11px; }
+
+  .scaling-service-list { gap: 18px; }
+  .scaling-card {
+    padding: 22px;
+    border-radius: 18px;
+    box-shadow: 0 8px 28px rgba(22, 52, 69, 0.045);
+  }
+
+  .scaling-card-head strong { font-size: 17px; }
+  .scaling-card-head span { font-size: 11px; line-height: 1.55; }
+  .scaling-status { padding: 7px 11px; font-size: 10px; }
+  .scaling-kpis { gap: 11px; margin: 18px 0; }
+  .scaling-kpis div { padding: 14px; }
+  .scaling-kpis span, .scaling-policy label { font-size: 10px; }
+  .scaling-kpis strong { font-size: 17px; }
+  .scaling-policy { gap: 12px; padding-top: 17px; }
+
+  .scaling-policy input,
+  .scaling-policy select,
+  .scaling-instance input {
+    padding: 9px;
+    font-size: 11px;
+  }
+
+  .scaling-policy-actions button,
+  .scaling-instance button {
+    padding: 9px 12px;
+    font-size: 11px;
+  }
+
+  .scaling-instances { margin-top: 18px; }
+  .scaling-instances h4 { font-size: 12px; }
+  .scaling-instance {
+    grid-template-columns: minmax(240px, 1.8fr) 76px 76px 120px 60px 60px;
+    padding: 11px 0;
+    font-size: 10px;
+  }
+
+  .scaling-event { padding: 14px 16px; }
+  .scaling-event strong, .scaling-event span { font-size: 11px; }
+  .scaling-event small { font-size: 10px; }
+  .module-release { margin-top: 18px; padding-top: 17px; }
+  .module-release span { font-size: 10px; }
+  .module-release code { font-size: 11px; }
+
+  .module-release-actions input,
+  .module-release-actions button {
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+}
+
+@media (min-width: 960px) and (max-width: 1320px) {
+  .gpu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -1,15 +1,15 @@
-# Cloud Helm 0.9.2 全新部署与 0.8.1 升级
+# Cloud Helm 0.9.3 全新部署与 0.8.1 升级
 
-本文提供两条独立路径：全新部署 0.9.2，以及保留数据从 0.8.1 原地升级。不要把两套命令混用。
+本文提供两条独立路径：全新部署 0.9.3，以及保留数据从 0.8.1 原地升级。不要把两套命令混用。
 
 发布产物：
 
-- `cloudhelm-0.9.2.tar.gz`
-- `cloudhelm-0.9.2.tar.gz.sha256`
-- `ghcr.io/xbl916/cloud-helm-server:0.9.2`
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.2`
+- `cloudhelm-0.9.3.tar.gz`
+- `cloudhelm-0.9.3.tar.gz.sha256`
+- `ghcr.io/xbl916/cloud-helm-server:0.9.3`
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.3`
 
-## 一、全新部署 0.9.2
+## 一、全新部署 0.9.3
 
 ### 1. 前置条件
 
@@ -21,12 +21,12 @@
 ### 2. 校验并解压
 
 ```bash
-sha256sum -c cloudhelm-0.9.2.tar.gz.sha256
-tar -xzf cloudhelm-0.9.2.tar.gz
-cd cloudhelm-0.9.2
+sha256sum -c cloudhelm-0.9.3.tar.gz.sha256
+tar -xzf cloudhelm-0.9.3.tar.gz
+cd cloudhelm-0.9.3
 ```
 
-校验必须输出 `cloudhelm-0.9.2.tar.gz: OK`。失败时停止部署并重新获取发布包。
+校验必须输出 `cloudhelm-0.9.3.tar.gz: OK`。失败时停止部署并重新获取发布包。
 
 ### 3. 配置 Server
 
@@ -80,7 +80,7 @@ curl --fail http://127.0.0.1:8080/healthz
 在每台 Docker 节点解压同一发布包：
 
 ```bash
-cd cloudhelm-0.9.2/deploy
+cd cloudhelm-0.9.3/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -114,7 +114,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build ag
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-确认管理台节点在线、Agent 版本为 0.9.2、容器和 GPU 数量正确后，再部署下一台。Agent 更新或启动不会停止节点上的 AI 业务容器。
+确认管理台节点在线、Agent 版本为 0.9.3、容器和 GPU 数量正确后，再部署下一台。Agent 更新或启动不会停止节点上的 AI 业务容器。
 
 ### 6. 接入业务与 ACS
 
@@ -127,11 +127,11 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 age
 
 具体接口、RBAC 和上线检查见[混合云弹性文档](hybrid-autoscaling.md)，镜像升级顺序见[模块分阶段发布文档](module-image-releases.md)。
 
-## 二、从 0.8.1 原地升级到 0.9.2
+## 二、从 0.8.1 原地升级到 0.9.3
 
 ### 1. 升级边界
 
-0.9.2 会新增以下数据库对象：
+0.9.3 会新增以下数据库对象：
 
 - `scaling_services`、`service_instances`、`business_metric_samples`、`scaling_events`；
 - 模块期望镜像、ACS 目标容器和分阶段发布状态字段；
@@ -156,9 +156,9 @@ SQLite 部署先短暂停止 Server，再备份；Agent 和 AI 业务容器保�
 
 ```bash
 docker compose stop server
-sudo tar -czf ../cloudhelm-0.8.1-before-0.9.2.tar.gz -C cloudhelm-data .
-chmod 600 ../cloudhelm-0.8.1-before-0.9.2.tar.gz
-test -s ../cloudhelm-0.8.1-before-0.9.2.tar.gz
+sudo tar -czf ../cloudhelm-0.8.1-before-0.9.3.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-0.8.1-before-0.9.3.tar.gz
+test -s ../cloudhelm-0.8.1-before-0.9.3.tar.gz
 ```
 
 如果使用 PostgreSQL，先执行逻辑备份，再停止 Server：
@@ -167,22 +167,22 @@ test -s ../cloudhelm-0.8.1-before-0.9.2.tar.gz
 docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml exec -T database \
   pg_dump -U cloudhelm -d cloudhelm --format=custom \
-  > ../cloudhelm-0.8.1-before-0.9.2.dump
-test -s ../cloudhelm-0.8.1-before-0.9.2.dump
-chmod 600 ../cloudhelm-0.8.1-before-0.9.2.dump
+  > ../cloudhelm-0.8.1-before-0.9.3.dump
+test -s ../cloudhelm-0.8.1-before-0.9.3.dump
+chmod 600 ../cloudhelm-0.8.1-before-0.9.3.dump
 docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml stop server
 ```
 
 把备份复制到另一台受控设备并记录校验值。不要删除、清空或覆盖现有数据目录。
 
-### 3. 准备 0.9.2 文件
+### 3. 准备 0.9.3 文件
 
-在另一目录校验并解压 0.9.2 发布包：
+在另一目录校验并解压 0.9.3 发布包：
 
 ```bash
-sha256sum -c cloudhelm-0.9.2.tar.gz.sha256
-tar -xzf cloudhelm-0.9.2.tar.gz
+sha256sum -c cloudhelm-0.9.3.tar.gz.sha256
+tar -xzf cloudhelm-0.9.3.tar.gz
 ```
 
 保留 0.8.1 部署目录中的 `.env`、`cloudhelm-data`、`deploy/agent.env`、`deploy/cloudhelm-data` 和 PostgreSQL 数据目录。不要用 `.env.example`、`agent.env.example` 或空目录覆盖它们。
@@ -205,7 +205,7 @@ CLOUDHELM_IMAGE_RELEASE_TIMEOUT_SECONDS=3600
 SQLite 部署：
 
 ```bash
-cp /0.9.2解压目录/docker-compose.yml ./docker-compose.yml
+cp /0.9.3解压目录/docker-compose.yml ./docker-compose.yml
 docker compose config
 docker compose pull server
 docker compose up -d --no-build --remove-orphans server
@@ -217,7 +217,7 @@ curl --fail https://ops.company.com/healthz
 PostgreSQL 部署改为复制 `deploy/postgres.compose.yml`，并继续使用原来的 `deploy/postgres.env`：
 
 ```bash
-cp /0.9.2解压目录/deploy/postgres.compose.yml ./deploy/postgres.compose.yml
+cp /0.9.3解压目录/deploy/postgres.compose.yml ./deploy/postgres.compose.yml
 docker compose --env-file deploy/postgres.env \
   -f deploy/postgres.compose.yml config
 docker compose --env-file deploy/postgres.env \
@@ -229,7 +229,7 @@ docker compose --env-file deploy/postgres.env \
 curl --fail https://ops.company.com/healthz
 ```
 
-SQLite 首次启动会在迁移前自动创建 `cloudhelm-data/cloudhelm.db.pre-0.9.2.bak` 并执行完整性检查。确认管理台显示 0.9.2，企微 H5 与 PC 扫码登录、用户权限、节点列表、容器数量、历史指标、告警和审计均正常。此时自动伸缩仍应显示为关闭。
+SQLite 首次启动会在迁移前自动创建 `cloudhelm-data/cloudhelm.db.pre-0.9.3.bak` 并执行完整性检查。确认管理台显示 0.9.3，企微 H5 与 PC 扫码登录、用户权限、节点列表、容器数量、历史指标、告警和审计均正常。此时自动伸缩仍应显示为关闭。
 
 ### 5. 逐节点升级 Agent
 
@@ -238,8 +238,8 @@ SQLite 首次启动会在迁移前自动创建 `cloudhelm-data/cloudhelm.db.pre-
 在每个 0.8.1 Agent 部署目录中保留原有 `agent.env` 和 `cloudhelm-data`，复制新版 Compose：
 
 ```bash
-cp /0.9.2解压目录/deploy/agent.compose.yml ./agent.compose.yml
-cp /0.9.2解压目录/deploy/agent.gpu.compose.yml ./agent.gpu.compose.yml
+cp /0.9.3解压目录/deploy/agent.compose.yml ./agent.compose.yml
+cp /0.9.3解压目录/deploy/agent.gpu.compose.yml ./agent.gpu.compose.yml
 ```
 
 GPU 节点：
@@ -251,13 +251,13 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml up -d --no-build ag
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 agent
 ```
 
-非 GPU 节点删除所有 `-f agent.gpu.compose.yml`。在管理台确认该节点重新在线、Agent 版本为 0.9.2、原节点 ID 未变化、容器/GPU 状态正确，再处理下一台。
+非 GPU 节点删除所有 `-f agent.gpu.compose.yml`。在管理台确认该节点重新在线、Agent 版本为 0.9.3、原节点 ID 未变化、容器/GPU 状态正确，再处理下一台。
 
 升级平台和 Agent 时不要顺便批量重建 AI 容器。业务负载上报、自动关联标签和分阶段镜像发布应在平台升级验证完成后单独接入；同一服务的多个 GPU 容器仍按逐个验证的方式变更。
 
 ### 6. 升级验收
 
-- Server 和全部 Agent 显示 0.9.2，所有既有节点仍使用原节点身份。
+- Server 和全部 Agent 显示 0.9.3，所有既有节点仍使用原节点身份。
 - 企微登录、角色、资源授权、告警订阅和审计记录正常。
 - 既有容器和 GPU 数量与升级前一致，没有业务容器被重建。
 - 全局 `CLOUDHELM_AUTOSCALING_ENABLED=false`，尚未误操作 ACS。
@@ -267,7 +267,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 age
 
 ### 7. 回退
 
-如果 0.9.2 Server 无法启动，先保存日志，再把 Compose 中 Server 镜像改回 `ghcr.io/xbl916/cloud-helm-server:0.8.1` 并重新启动。0.8.1 不会读取新增表；不要立即恢复数据库或删除新增对象。
+如果 0.9.3 Server 无法启动，先保存日志，再把 Compose 中 Server 镜像改回 `ghcr.io/xbl916/cloud-helm-server:0.8.1` 并重新启动。0.8.1 不会读取新增表；不要立即恢复数据库或删除新增对象。
 
 如果必须精确恢复升级前数据状态：停止 Server，把当前数据目录移动到明确命名的故障保留目录，再从已验证的升级前备份恢复。PostgreSQL 使用现有 DBA 恢复流程恢复 `.dump`。这是破坏性恢复操作，必须先复核路径和备份可读性。
 

@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.2" in compose
+    assert f"cloud-helm-{service}:0.9.3" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -39,6 +39,21 @@ def test_container_entrypoints_are_included_in_docker_context():
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
     assert "!deploy/server-entrypoint.sh" in dockerignore
     assert "!deploy/agent-entrypoint.sh" in dockerignore
+
+
+def test_desktop_stylesheet_is_packaged_and_linked_after_module_styles():
+    page = (ROOT / "cloudhelm/static/index.html").read_text(encoding="utf-8")
+    desktop_asset = "/assets/desktop.css"
+    assert desktop_asset in page
+    assert page.index(desktop_asset) > page.index("/assets/scaling.css")
+
+    desktop = (ROOT / "cloudhelm/static/assets/desktop.css").read_text(
+        encoding="utf-8"
+    )
+    app = (ROOT / "cloudhelm/static/assets/app.css").read_text(encoding="utf-8")
+    assert "@media (min-width: 960px)" in desktop
+    assert "@media (min-width: 960px)" in app
+    assert "--desktop-rail" in app
 
 
 def test_server_entrypoint_drops_identity_and_all_capabilities():

@@ -360,7 +360,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
             "agent_key": f"auto-bind-agent-{uuid4()}",
             "name": "自动关联节点",
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.2",
+            "agent_version": "0.9.3",
         },
     )
     assert enrolled.status_code == 200
@@ -373,7 +373,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
         },
         json={
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.2",
+            "agent_version": "0.9.3",
             "containers": [
                 {
                     "docker_id": "local-auto-container-123456",
