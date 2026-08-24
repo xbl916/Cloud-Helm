@@ -8,8 +8,9 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
+from cloudhelm.access import can_access_service, load_access_rules
 from cloudhelm.audit import add_audit
-from cloudhelm.dependencies import Admin, Config, Db
+from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
 from cloudhelm.image_reference import parse_tagged_image, validate_tag_change
 from cloudhelm.models import (
     Container,
@@ -17,6 +18,7 @@ from cloudhelm.models import (
     ScalingEvent,
     ScalingService,
     ServiceInstance,
+    User,
 )
 from cloudhelm.releases import ACTIVE_RELEASE_STATUSES, resolve_local_container
 from cloudhelm.schemas import (
@@ -102,7 +104,9 @@ def _instance_out(db: Db, instance: ServiceInstance, default_capacity: int) -> d
     }
 
 
-def _service_out(db: Db, service: ScalingService, include_instances: bool = True) -> dict:
+def _service_out(
+    db: Db, service: ScalingService, include_instances: bool = True
+) -> dict:
     result = {
         "id": service.id,
         "name": service.name,
@@ -161,6 +165,20 @@ def _apply_service_input(service: ScalingService, payload: ScalingServiceInput) 
     service.updated_at = datetime.now(UTC)
 
 
+def _require_service_permission(
+    db: Db,
+    user: User,
+    service: ScalingService | None,
+    permission: str,
+) -> ScalingService:
+    if not service:
+        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    rules = load_access_rules(db, user)
+    if not can_access_service(user, rules, service.id, permission):
+        raise HTTPException(status_code=403, detail="没有该 AI 服务的操作权限")
+    return service
+
+
 @router.post("/service-metrics/{service_id}/report")
 def report_business_load(
     service_id: str,
@@ -203,7 +221,9 @@ def report_business_load(
                 status_code=422,
                 detail="服务端尚未配置网关可发布地址网段",
             )
-        if not any(address in network for network in settings.gateway_discovery_networks):
+        if not any(
+            address in network for network in settings.gateway_discovery_networks
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="服务地址不在允许发布给网关的网段内",
@@ -260,9 +280,7 @@ def report_business_load(
         "endpoint_registered": bool(
             effective_host and instance.endpoint_scheme and instance.endpoint_port
         ),
-        "report_after_seconds": max(
-            5, min(15, service.report_stale_seconds // 3)
-        ),
+        "report_after_seconds": max(5, min(15, service.report_stale_seconds // 3)),
     }
 
 
@@ -352,16 +370,16 @@ def discover_gateway_routes(
                 continue
             endpoints.append(
                 {
-                "instance_id": instance.instance_id,
-                "pool": instance.pool,
-                "scheme": instance.endpoint_scheme,
-                "host": host,
-                "port": instance.endpoint_port,
-                "url": _endpoint_url(instance, host),
-                "expires_at": (
-                    _aware(instance.updated_at)
-                    + timedelta(seconds=service.report_stale_seconds)
-                ).isoformat(),
+                    "instance_id": instance.instance_id,
+                    "pool": instance.pool,
+                    "scheme": instance.endpoint_scheme,
+                    "host": host,
+                    "port": instance.endpoint_port,
+                    "url": _endpoint_url(instance, host),
+                    "expires_at": (
+                        _aware(instance.updated_at)
+                        + timedelta(seconds=service.report_stale_seconds)
+                    ).isoformat(),
                 }
             )
         routes.append(
@@ -397,11 +415,21 @@ def discover_gateway_routes(
 
 
 @router.get("/scaling/services")
-def list_scaling_services(db: Db, admin: Admin) -> list[dict]:
-    return [
-        _service_out(db, service)
-        for service in db.scalars(select(ScalingService).order_by(ScalingService.name)).all()
-    ]
+def list_scaling_services(db: Db, user: CurrentUser) -> list[dict]:
+    rules = load_access_rules(db, user)
+    result = []
+    for service in db.scalars(
+        select(ScalingService).order_by(ScalingService.name)
+    ).all():
+        if not can_access_service(user, rules, service.id, "view"):
+            continue
+        item = _service_out(db, service)
+        item["permissions"] = {
+            permission: can_access_service(user, rules, service.id, permission)
+            for permission in ("view", "operate", "manage")
+        }
+        result.append(item)
+    return result
 
 
 @router.post("/scaling/services", status_code=status.HTTP_201_CREATED)
@@ -443,13 +471,15 @@ def update_scaling_service(
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
-    service = db.get(ScalingService, service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "operate"
+    )
     if service.release_status in ACTIVE_RELEASE_STATUSES:
-        raise HTTPException(status_code=409, detail="镜像正在分阶段发布，暂时不能修改模块配置")
+        raise HTTPException(
+            status_code=409, detail="镜像正在分阶段发布，暂时不能修改模块配置"
+        )
     duplicate = db.scalar(
         select(ScalingService.id).where(
             ScalingService.name == payload.name,
@@ -465,7 +495,7 @@ def update_scaling_service(
         target_type="scaling_service",
         target_id=service.id,
         target_name=service.name,
-        user=admin,
+        user=user,
         detail=(
             f"autoscaling={service.autoscaling_enabled}, "
             f"thresholds={service.scale_up_threshold_percent}/{service.scale_down_threshold_percent}"
@@ -481,7 +511,7 @@ def _start_image_release(
     db: Db,
     service: ScalingService,
     target_image: str,
-    admin: Admin,
+    admin: User,
     now: datetime,
 ) -> str:
     if service.release_status in ACTIVE_RELEASE_STATUSES:
@@ -542,22 +572,24 @@ def _same_image(left: str, right: str) -> bool:
         return False
 
 
-@router.post("/scaling/services/{service_id}/release", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/scaling/services/{service_id}/release", status_code=status.HTTP_202_ACCEPTED
+)
 def start_image_release(
     service_id: str,
     payload: ModuleReleaseInput,
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
-    service = db.get(ScalingService, service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "manage"
+    )
     if not settings.autoscaling_enabled:
         raise HTTPException(status_code=409, detail="请先启用全局 ACS 连接开关")
     target = _start_image_release(
-        db, service, payload.target_image, admin, datetime.now(UTC)
+        db, service, payload.target_image, user, datetime.now(UTC)
     )
     add_audit(
         db,
@@ -565,7 +597,7 @@ def start_image_release(
         target_type="scaling_service",
         target_id=service.id,
         target_name=service.name,
-        user=admin,
+        user=user,
         detail=f"image={service.previous_image}->{target}",
         request=request,
         settings=settings,
@@ -574,23 +606,26 @@ def start_image_release(
     return _service_out(db, service)
 
 
-@router.post("/scaling/services/{service_id}/release/rollback", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/scaling/services/{service_id}/release/rollback",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 def rollback_image_release(
     service_id: str,
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
-    service = db.get(ScalingService, service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "manage"
+    )
     if not service.previous_image:
         raise HTTPException(status_code=409, detail="没有可回滚的上一版本")
     if not settings.autoscaling_enabled:
         raise HTTPException(status_code=409, detail="请先启用全局 ACS 连接开关")
     target = _start_image_release(
-        db, service, service.previous_image, admin, datetime.now(UTC)
+        db, service, service.previous_image, user, datetime.now(UTC)
     )
     add_audit(
         db,
@@ -598,7 +633,7 @@ def rollback_image_release(
         target_type="scaling_service",
         target_id=service.id,
         target_name=service.name,
-        user=admin,
+        user=user,
         detail=f"target_image={target}",
         request=request,
         settings=settings,
@@ -613,11 +648,11 @@ def rotate_report_token(
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
-    service = db.get(ScalingService, service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "manage"
+    )
     raw_token = new_opaque_token()
     service.report_token_hash = digest_token(raw_token)
     add_audit(
@@ -626,7 +661,7 @@ def rotate_report_token(
         target_type="scaling_service",
         target_id=service.id,
         target_name=service.name,
-        user=admin,
+        user=user,
         request=request,
         settings=settings,
     )
@@ -641,14 +676,13 @@ def update_instance_capacity(
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
     instance = db.get(ServiceInstance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="服务实例不存在")
     service = db.get(ScalingService, instance.service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(db, user, service, "operate")
     instance.capacity_limit = payload.capacity_limit
     add_audit(
         db,
@@ -656,7 +690,7 @@ def update_instance_capacity(
         target_type="scaling_service",
         target_id=service.id,
         target_name=f"{service.name}/{instance.instance_id}",
-        user=admin,
+        user=user,
         detail=f"capacity={payload.capacity_limit or 'default'}",
         request=request,
         settings=settings,
@@ -672,14 +706,13 @@ def update_instance_monitoring(
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> dict:
     instance = db.get(ServiceInstance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="服务实例不存在")
     service = db.get(ScalingService, instance.service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(db, user, service, "operate")
     instance.monitored = payload.monitored
     if not payload.monitored:
         instance.desired_state = "serve"
@@ -690,7 +723,7 @@ def update_instance_monitoring(
         target_type="scaling_service",
         target_id=service.id,
         target_name=f"{service.name}/{instance.instance_id}",
-        user=admin,
+        user=user,
         detail=f"monitored={payload.monitored}",
         request=request,
         settings=settings,
@@ -707,14 +740,13 @@ def delete_service_instance(
     request: Request,
     db: Db,
     settings: Config,
-    admin: Admin,
+    user: CurrentUser,
 ) -> Response:
     instance = db.get(ServiceInstance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="服务实例不存在")
     service = db.get(ScalingService, instance.service_id)
-    if not service:
-        raise HTTPException(status_code=404, detail="伸缩服务不存在")
+    service = _require_service_permission(db, user, service, "manage")
     if service.release_status in ACTIVE_RELEASE_STATUSES:
         raise HTTPException(status_code=409, detail="镜像正在分阶段发布，不能删除实例")
     if instance.container_id:
@@ -728,7 +760,7 @@ def delete_service_instance(
         target_type="scaling_service",
         target_id=service.id,
         target_name=f"{service.name}/{instance.instance_id}",
-        user=admin,
+        user=user,
         detail=(
             f"instance_id={instance.instance_id},pool={instance.pool},"
             f"active_businesses={instance.active_businesses}"
@@ -742,11 +774,20 @@ def delete_service_instance(
 
 
 @router.get("/scaling/events")
-def list_scaling_events(db: Db, admin: Admin, limit: int = 100) -> list[dict]:
+def list_scaling_events(db: Db, user: CurrentUser, limit: int = 100) -> list[dict]:
     limit = min(500, max(1, limit))
     services = {item.id: item.name for item in db.scalars(select(ScalingService)).all()}
+    rules = load_access_rules(db, user)
+    visible_service_ids = {
+        service_id
+        for service_id in services
+        if can_access_service(user, rules, service_id, "view")
+    }
     events = db.scalars(
-        select(ScalingEvent).order_by(ScalingEvent.created_at.desc()).limit(limit)
+        select(ScalingEvent)
+        .where(ScalingEvent.service_id.in_(visible_service_ids))
+        .order_by(ScalingEvent.created_at.desc())
+        .limit(limit)
     ).all()
     return [
         {

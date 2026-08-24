@@ -14,6 +14,7 @@ class UserOut(BaseModel):
     display_name: str
     role: UserRole
     can_manage_access: bool = False
+    can_view_scaling: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -56,6 +57,7 @@ class UserUpdate(BaseModel):
     wecom_userid: str | None = Field(default=None, min_length=1, max_length=128)
     role: UserRole | None = None
     is_active: bool | None = None
+    elevated_access_action: Literal["retain", "clear"] | None = None
 
     @field_validator("wecom_userid")
     @classmethod
@@ -69,11 +71,12 @@ class UserUpdate(BaseModel):
 
 
 class AccessRuleInput(BaseModel):
-    scope_type: Literal["all", "environment", "node", "project", "container"]
+    scope_type: Literal["all", "environment", "node", "project", "container", "service"]
     environment: str | None = Field(default=None, max_length=40)
     node_id: str | None = Field(default=None, max_length=36)
     project: str | None = Field(default=None, max_length=255)
     container_id: str | None = Field(default=None, max_length=36)
+    service_id: str | None = Field(default=None, max_length=36)
     can_view: bool = True
     can_logs: bool = False
     can_operate: bool = False
@@ -242,9 +245,7 @@ class HeartbeatRequest(BaseModel):
     gpus: list[GpuSnapshot] = Field(default_factory=list, max_length=128)
     system_metrics_status: Literal["ok", "unavailable", "error"] = "unavailable"
     system_metrics_error: str | None = Field(default=None, max_length=500)
-    system_metrics: SystemMetricsSnapshot = Field(
-        default_factory=SystemMetricsSnapshot
-    )
+    system_metrics: SystemMetricsSnapshot = Field(default_factory=SystemMetricsSnapshot)
     containers: list[ContainerSnapshot] = Field(default_factory=list, max_length=2000)
 
 

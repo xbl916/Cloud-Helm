@@ -7,11 +7,14 @@ from cloudhelm.autoscaling import evaluate_service
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal
 from cloudhelm.models import (
+    AccessRule,
     BusinessMetricSample,
     Container,
     ScalingEvent,
     ScalingService,
     ServiceInstance,
+    User,
+    UserRole,
 )
 from cloudhelm.security import digest_token
 
@@ -108,6 +111,214 @@ def test_business_service_report_and_instance_capacity(
     assert target_after_delete["instances"] == []
 
 
+def test_ai_service_permissions_split_view_configure_and_release(
+    client, admin_headers: dict[str, str], session_for
+):
+    created = client.post(
+        "/api/v1/scaling/services",
+        headers=admin_headers,
+        json=_payload(f"VLM-permissions-{uuid4()}"),
+    )
+    assert created.status_code == 201
+    service = created.json()
+
+    users = [
+        ("scaling-viewer", UserRole.viewer, False, False),
+        ("scaling-configurer", UserRole.operator, True, False),
+        ("scaling-releaser", UserRole.operator, True, True),
+        ("scaling-hidden", UserRole.viewer, False, False),
+    ]
+    with SessionLocal() as db:
+        for userid, role, can_operate, can_manage in users:
+            user = User(
+                username=userid,
+                wecom_userid=userid,
+                display_name=userid,
+                role=role,
+                resource_restricted=True,
+            )
+            db.add(user)
+            db.flush()
+            if userid != "scaling-hidden":
+                db.add(
+                    AccessRule(
+                        user_id=user.id,
+                        scope_type="service",
+                        service_id=service["id"],
+                        can_view=True,
+                        can_operate=can_operate,
+                        can_manage=can_manage,
+                    )
+                )
+        db.commit()
+
+    viewer_headers = session_for("scaling-viewer")
+    assert client.get("/api/v1/auth/me").json()["can_view_scaling"] is True
+    viewer_services = client.get("/api/v1/scaling/services").json()
+    assert [item["id"] for item in viewer_services] == [service["id"]]
+    assert viewer_services[0]["permissions"] == {
+        "view": True,
+        "operate": False,
+        "manage": False,
+    }
+    assert (
+        client.put(
+            f"/api/v1/scaling/services/{service['id']}",
+            headers=viewer_headers,
+            json=_payload(service["name"]),
+        ).status_code
+        == 403
+    )
+
+    configurer_headers = session_for("scaling-configurer")
+    configurer_service = client.get("/api/v1/scaling/services").json()[0]
+    assert configurer_service["permissions"] == {
+        "view": True,
+        "operate": True,
+        "manage": False,
+    }
+    assert (
+        client.put(
+            f"/api/v1/scaling/services/{service['id']}",
+            headers=configurer_headers,
+            json=_payload(service["name"]),
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/v1/scaling/services/{service['id']}/report-token/rotate",
+            headers=configurer_headers,
+        ).status_code
+        == 403
+    )
+
+    releaser_headers = session_for("scaling-releaser")
+    releaser_service = client.get("/api/v1/scaling/services").json()[0]
+    assert releaser_service["permissions"] == {
+        "view": True,
+        "operate": True,
+        "manage": True,
+    }
+    assert (
+        client.post(
+            f"/api/v1/scaling/services/{service['id']}/report-token/rotate",
+            headers=releaser_headers,
+        ).status_code
+        == 200
+    )
+
+    session_for("scaling-hidden")
+    assert client.get("/api/v1/auth/me").json()["can_view_scaling"] is False
+    assert client.get("/api/v1/scaling/services").json() == []
+
+
+def test_initial_admin_decides_whether_downgrade_retains_elevated_service_rights(
+    client, admin_headers: dict[str, str], session_for
+):
+    created = client.post(
+        "/api/v1/scaling/services",
+        headers=admin_headers,
+        json=_payload(f"VLM-role-change-{uuid4()}"),
+    ).json()
+    with SessionLocal() as db:
+        user = User(
+            username="role-change-operator",
+            wecom_userid="role-change-operator",
+            display_name="Role Change Operator",
+            role=UserRole.operator,
+            resource_restricted=True,
+        )
+        db.add(user)
+        db.flush()
+        user_id = user.id
+        db.add(
+            AccessRule(
+                user_id=user.id,
+                scope_type="service",
+                service_id=created["id"],
+                can_view=True,
+                can_operate=True,
+                can_manage=True,
+            )
+        )
+        db.add(
+            User(
+                username="secondary-role-admin",
+                wecom_userid="secondary-role-admin",
+                display_name="Secondary Role Admin",
+                role=UserRole.admin,
+                resource_restricted=False,
+            )
+        )
+        db.commit()
+
+    secondary_headers = session_for("secondary-role-admin")
+    listed = client.get("/api/v1/users").json()
+    target = next(item for item in listed if item["id"] == user_id)
+    assert target["can_edit_account"] is True
+    assert target["can_edit_role"] is False
+    denied = client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=secondary_headers,
+        json={"role": "viewer", "elevated_access_action": "retain"},
+    )
+    assert denied.status_code == 403
+
+    admin_headers = session_for("admin-wecom-id")
+    listed = client.get("/api/v1/users").json()
+    target = next(item for item in listed if item["id"] == user_id)
+    assert target["can_edit_role"] is True
+    missing_decision = client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=admin_headers,
+        json={"role": "viewer"},
+    )
+    assert missing_decision.status_code == 409
+
+    changed = client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=admin_headers,
+        json={"role": "viewer", "elevated_access_action": "retain"},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["role"] == "viewer"
+    with SessionLocal() as db:
+        rule = db.scalar(select(AccessRule).where(AccessRule.user_id == user_id))
+        assert rule is not None
+        assert rule.can_view is True
+        assert rule.can_operate is True
+        assert rule.can_manage is True
+
+    viewer_headers = session_for("role-change-operator")
+    assert (
+        client.post(
+            f"/api/v1/scaling/services/{created['id']}/report-token/rotate",
+            headers=viewer_headers,
+        ).status_code
+        == 403
+    )
+
+    admin_headers = session_for("admin-wecom-id")
+    promoted = client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=admin_headers,
+        json={"role": "operator"},
+    )
+    assert promoted.status_code == 200
+    cleared = client.patch(
+        f"/api/v1/users/{user_id}",
+        headers=admin_headers,
+        json={"role": "viewer", "elevated_access_action": "clear"},
+    )
+    assert cleared.status_code == 200
+    with SessionLocal() as db:
+        rule = db.scalar(select(AccessRule).where(AccessRule.user_id == user_id))
+        assert rule is not None
+        assert rule.can_operate is False
+        assert rule.can_manage is False
+
+
 def test_heterogeneous_instance_capacities_drive_service_utilization():
     now = datetime.now(UTC)
     provider = FakeAcsProvider(0)
@@ -178,9 +389,7 @@ def test_gateway_discovery_adds_and_removes_only_eligible_endpoints(
         )
         assert created.status_code == 201
         service = created.json()
-        report_headers = {
-            "X-CloudHelm-Service-Token": service["report_token"]
-        }
+        report_headers = {"X-CloudHelm-Service-Token": service["report_token"]}
         discovery_headers = {
             "X-CloudHelm-Gateway-Token": "test-gateway-discovery-token"
         }
@@ -367,9 +576,7 @@ def test_local_discovery_prefers_manually_configured_node_address(
 
         discovered = client.get(
             "/api/v1/service-discovery/routes",
-            headers={
-                "X-CloudHelm-Gateway-Token": "test-gateway-discovery-token"
-            },
+            headers={"X-CloudHelm-Gateway-Token": "test-gateway-discovery-token"},
         )
         route = next(
             item
@@ -403,7 +610,11 @@ def test_agent_labels_auto_bind_only_local_service_instances(
     local_report = client.post(
         f"/api/v1/service-metrics/{service['id']}/report",
         headers=report_headers,
-        json={"instance_id": "vlm-local-auto-1", "pool": "local", "active_businesses": 1},
+        json={
+            "instance_id": "vlm-local-auto-1",
+            "pool": "local",
+            "active_businesses": 1,
+        },
     )
     assert local_report.status_code == 200
     assert local_report.json()["container_linked"] is False
@@ -495,7 +706,11 @@ def test_agent_labels_auto_bind_only_local_service_instances(
     repeated = client.post(
         f"/api/v1/service-metrics/{service['id']}/report",
         headers=report_headers,
-        json={"instance_id": "vlm-local-auto-1", "pool": "local", "active_businesses": 2},
+        json={
+            "instance_id": "vlm-local-auto-1",
+            "pool": "local",
+            "active_businesses": 2,
+        },
     )
     assert repeated.status_code == 200
     assert repeated.json()["container_id"] == local_container_id
@@ -541,17 +756,13 @@ class FakeAcsProvider:
     def get_replicas(self, service: ScalingService) -> int:
         return self.replicas
 
-    def set_replicas(
-        self, service: ScalingService, expected: int, target: int
-    ) -> int:
+    def set_replicas(self, service: ScalingService, expected: int, target: int) -> int:
         assert expected == self.replicas
         self.scale_calls.append((expected, target))
         self.replicas = target
         return target
 
-    def prefer_pod_for_removal(
-        self, service: ScalingService, pod_name: str
-    ) -> None:
+    def prefer_pod_for_removal(self, service: ScalingService, pod_name: str) -> None:
         self.preferred_pods.append(pod_name)
 
 

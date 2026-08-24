@@ -32,9 +32,7 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
-def _add_columns(
-    target_engine: Engine, additions: dict[str, dict[str, str]]
-) -> None:
+def _add_columns(target_engine: Engine, additions: dict[str, dict[str, str]]) -> None:
     """Apply one idempotent additive schema migration."""
     with target_engine.begin() as connection:
         inspector = inspect(connection)
@@ -106,12 +104,8 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
         (
             "0006_alert_subscriptions",
             {
-                "users": {
-                    "alert_notifications": "BOOLEAN NOT NULL DEFAULT FALSE"
-                },
-                "access_rules": {
-                    "alert_notify": "BOOLEAN NOT NULL DEFAULT FALSE"
-                },
+                "users": {"alert_notifications": "BOOLEAN NOT NULL DEFAULT FALSE"},
+                "access_rules": {"alert_notify": "BOOLEAN NOT NULL DEFAULT FALSE"},
             },
         ),
         (
@@ -180,6 +174,10 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
                     "business_instances": "INTEGER NOT NULL DEFAULT 0",
                 }
             },
+        ),
+        (
+            "0014_ai_service_alert_permissions",
+            {"access_rules": {"service_id": "VARCHAR(36)"}},
         ),
     ]
 
@@ -268,9 +266,7 @@ def initialize_database(target_engine: Engine = engine) -> None:
     )
     _sqlite_integrity_check(target_engine)
     migration_pending = _has_pending_migrations(target_engine)
-    _backup_sqlite(
-        target_engine, sqlite_existed, migration_pending
-    )
+    _backup_sqlite(target_engine, sqlite_existed, migration_pending)
     Base.metadata.create_all(bind=target_engine)
     _apply_migrations(target_engine)
     _sqlite_integrity_check(target_engine)

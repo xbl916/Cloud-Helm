@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import delete, select, update
 
-from cloudhelm.access import can_manage_resources
+from cloudhelm.access import can_manage_resources, can_view_scaling
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import (
     CSRF_COOKIE,
@@ -43,6 +43,7 @@ def _user_out(db: Db, user: User) -> dict:
         "display_name": user.display_name,
         "role": user.role,
         "can_manage_access": can_manage_resources(db, user),
+        "can_view_scaling": can_view_scaling(db, user),
     }
 
 
@@ -103,7 +104,9 @@ async def _get_access_token(settings: Config, secret: str | None = None) -> str:
     if cached:
         return cached
     try:
-        async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.wecom_api_timeout_seconds
+        ) as client:
             response = await client.get(
                 f"{settings.wecom_api_base}/cgi-bin/gettoken",
                 params={"corpid": settings.wecom_corp_id, "corpsecret": credential},
@@ -124,7 +127,9 @@ async def _get_access_token(settings: Config, secret: str | None = None) -> str:
 async def resolve_wecom_userid(code: str, settings: Config) -> str:
     access_token = await _get_access_token(settings)
     try:
-        async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.wecom_api_timeout_seconds
+        ) as client:
             response = await client.get(
                 f"{settings.wecom_api_base}/cgi-bin/auth/getuserinfo",
                 params={"access_token": access_token, "code": code},
@@ -143,12 +148,16 @@ async def resolve_wecom_userid(code: str, settings: Config) -> str:
 
 async def resolve_wecom_miniprogram_userid(code: str, settings: Config) -> str:
     if not settings.wecom_miniprogram_secret:
-        raise HTTPException(status_code=503, detail="服务端尚未配置企业微信小程序 Secret")
+        raise HTTPException(
+            status_code=503, detail="服务端尚未配置企业微信小程序 Secret"
+        )
     access_token = await _get_access_token(
         settings, secret=settings.wecom_miniprogram_secret
     )
     try:
-        async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.wecom_api_timeout_seconds
+        ) as client:
             response = await client.get(
                 f"{settings.wecom_api_base}/cgi-bin/miniprogram/jscode2session",
                 params={
@@ -160,9 +169,13 @@ async def resolve_wecom_miniprogram_userid(code: str, settings: Config) -> str:
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="企业微信小程序认证服务暂不可用") from exc
+        raise HTTPException(
+            status_code=502, detail="企业微信小程序认证服务暂不可用"
+        ) from exc
     if payload.get("errcode") != 0:
-        raise HTTPException(status_code=401, detail="企业微信小程序登录凭证无效或已使用")
+        raise HTTPException(
+            status_code=401, detail="企业微信小程序登录凭证无效或已使用"
+        )
     corp_id = payload.get("corpid") or payload.get("corp_id")
     if not isinstance(corp_id, str) or not secrets.compare_digest(
         corp_id, settings.wecom_corp_id
@@ -230,7 +243,9 @@ def _consume_oauth_state(
 ) -> OAuthState:
     cookie_state = request.cookies.get(OAUTH_COOKIE)
     if not cookie_state or not secrets.compare_digest(cookie_state, state):
-        raise HTTPException(status_code=403, detail="登录请求校验失败，请重新发起登录。")
+        raise HTTPException(
+            status_code=403, detail="登录请求校验失败，请重新发起登录。"
+        )
     now = datetime.now(UTC)
     oauth_state = db.scalar(
         select(OAuthState).where(OAuthState.state_hash == digest_token(state))
@@ -251,7 +266,9 @@ def _consume_oauth_state(
     )
     db.commit()
     if consumed.rowcount != 1:
-        raise HTTPException(status_code=403, detail="登录请求已经被使用，请重新发起登录。")
+        raise HTTPException(
+            status_code=403, detail="登录请求已经被使用，请重新发起登录。"
+        )
     return oauth_state
 
 
@@ -442,9 +459,7 @@ async def wecom_callback(
         request=request,
         user=user,
         audit_action=(
-            "wecom.qr.login"
-            if oauth_state.provider == "wecom_qr"
-            else "wecom.login"
+            "wecom.qr.login" if oauth_state.provider == "wecom_qr" else "wecom.login"
         ),
         auth_method=oauth_state.provider,
     )
@@ -529,8 +544,12 @@ def logout(
         settings=settings,
     )
     db.commit()
-    response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
-    response.delete_cookie(CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict")
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
+    )
+    response.delete_cookie(
+        CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict"
+    )
 
 
 @router.get("/me", response_model=UserOut)

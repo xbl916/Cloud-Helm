@@ -1,7 +1,9 @@
 import ipaddress
+import os
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +16,9 @@ class Settings(BaseSettings):
 
     app_name: str = "云舵 Cloud Helm"
     environment: str = "production"
+    display_timezone: str = Field(
+        default_factory=lambda: os.environ.get("TZ", "Asia/Shanghai")
+    )
     database_url: str = "sqlite:////data/cloudhelm.db"
     agent_enrollment_token: str = Field(min_length=16)
     public_base_url: str
@@ -30,9 +35,7 @@ class Settings(BaseSettings):
     oauth_state_seconds: int = Field(default=300, ge=60, le=600)
     wecom_api_timeout_seconds: float = Field(default=8.0, ge=2, le=30)
     wecom_api_base: str = "https://qyapi.weixin.qq.com"
-    wecom_qr_authorize_url: str = (
-        "https://login.work.weixin.qq.com/wwlogin/sso/login"
-    )
+    wecom_qr_authorize_url: str = "https://login.work.weixin.qq.com/wwlogin/sso/login"
     gateway_discovery_token: str | None = Field(
         default=None, min_length=16, max_length=512
     )
@@ -72,17 +75,11 @@ class Settings(BaseSettings):
         if value is None:
             return value
         lowered = value.lower()
-        if (
-            "change-me" in lowered
-            or "replace-me" in lowered
-            or "replace_me" in lowered
-        ):
+        if "change-me" in lowered or "replace-me" in lowered or "replace_me" in lowered:
             raise ValueError("example secrets must be replaced")
         return value
 
-    @field_validator(
-        "wecom_corp_id", "wecom_agent_id", "bootstrap_admin_wecom_userid"
-    )
+    @field_validator("wecom_corp_id", "wecom_agent_id", "bootstrap_admin_wecom_userid")
     @classmethod
     def reject_example_identity(cls, value: str) -> str:
         if "replace_me" in value.lower():
@@ -93,6 +90,15 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_public_base_url(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("display_timezone")
+    @classmethod
+    def validate_display_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("display_timezone must be a valid IANA timezone") from exc
+        return value
 
     @model_validator(mode="after")
     def validate_public_url(self) -> "Settings":
@@ -126,7 +132,9 @@ class Settings(BaseSettings):
             for cidr in cidrs:
                 ipaddress.ip_network(cidr, strict=False)
         except ValueError as exc:
-            raise ValueError("gateway_discovery_allowed_cidrs contains invalid CIDR") from exc
+            raise ValueError(
+                "gateway_discovery_allowed_cidrs contains invalid CIDR"
+            ) from exc
         return self
 
     @property
@@ -142,6 +150,7 @@ class Settings(BaseSettings):
             for item in self.gateway_discovery_allowed_cidrs.split(",")
             if item.strip()
         )
+
 
 @lru_cache
 def get_settings() -> Settings:

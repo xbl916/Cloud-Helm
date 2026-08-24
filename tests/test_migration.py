@@ -17,9 +17,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "oauth_states",
         "metric_samples",
         "alert_rule_seeds",
-    }.issubset(
-        inspector.get_table_names()
-    )
+    }.issubset(inspector.get_table_names())
     node_columns = {item["name"] for item in inspector.get_columns("nodes")}
     assert {
         "gpus_json",
@@ -38,9 +36,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "gateway_address",
     }.issubset(node_columns)
     container_columns = {item["name"] for item in inspector.get_columns("containers")}
-    metric_columns = {
-        item["name"] for item in inspector.get_columns("metric_samples")
-    }
+    metric_columns = {item["name"] for item in inspector.get_columns("metric_samples")}
     assert {
         "active_businesses",
         "business_capacity",
@@ -51,6 +47,7 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
     }
     assert "can_manage" in access_rule_columns
     assert "alert_notify" in access_rule_columns
+    assert "service_id" in access_rule_columns
     assert "access_version" in user_columns
     assert "alert_notifications" in user_columns
     assert {
@@ -132,7 +129,9 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.begin() as connection:
         for table, columns in monitoring_columns.items():
             for column in columns:
-                connection.execute(text(f'ALTER TABLE "{table}" DROP COLUMN "{column}"'))
+                connection.execute(
+                    text(f'ALTER TABLE "{table}" DROP COLUMN "{column}"')
+                )
         connection.execute(text('ALTER TABLE "access_rules" DROP COLUMN "can_manage"'))
 
     initialize_database(old_engine)
@@ -148,15 +147,21 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     assert set(monitoring_columns["containers"]).issubset(container_columns)
     assert "can_manage" in access_rule_columns
     assert "alert_notify" in access_rule_columns
+    assert "service_id" in access_rule_columns
     user_columns = {item["name"] for item in inspector.get_columns("users")}
     assert "access_version" in user_columns
     assert "alert_notifications" in user_columns
     assert "schema_migrations" in inspector.get_table_names()
     with old_engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 13
-        assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
+        assert (
+            connection.execute(
+                text("SELECT COUNT(*) FROM schema_migrations")
+            ).scalar_one()
+            == 14
+        )
+        assert (
+            connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
+        )
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
             == "原容器"
@@ -195,15 +200,17 @@ def test_initialize_database_adds_pc_qr_auth_columns(tmp_path):
     database = tmp_path / "cloudhelm-before-pc-qr.db"
     legacy_engine = create_engine(f"sqlite:///{database}")
     with legacy_engine.begin() as connection:
-        connection.execute(text("CREATE TABLE web_sessions (id VARCHAR(36) PRIMARY KEY)"))
-        connection.execute(text("CREATE TABLE oauth_states (id VARCHAR(36) PRIMARY KEY)"))
+        connection.execute(
+            text("CREATE TABLE web_sessions (id VARCHAR(36) PRIMARY KEY)")
+        )
+        connection.execute(
+            text("CREATE TABLE oauth_states (id VARCHAR(36) PRIMARY KEY)")
+        )
 
     initialize_database(legacy_engine)
 
     inspector = inspect(legacy_engine)
-    session_columns = {
-        item["name"] for item in inspector.get_columns("web_sessions")
-    }
+    session_columns = {item["name"] for item in inspector.get_columns("web_sessions")}
     state_columns = {item["name"] for item in inspector.get_columns("oauth_states")}
     assert "auth_method" in session_columns
     assert "provider" in state_columns
@@ -241,9 +248,7 @@ def test_initialize_database_adds_node_business_history_columns(tmp_path):
     database = tmp_path / "cloudhelm-before-business-history.db"
     legacy_engine = create_engine(f"sqlite:///{database}")
     with legacy_engine.begin() as connection:
-        connection.execute(
-            text("CREATE TABLE metric_samples (id INTEGER PRIMARY KEY)")
-        )
+        connection.execute(text("CREATE TABLE metric_samples (id INTEGER PRIMARY KEY)"))
 
     initialize_database(legacy_engine)
 
@@ -273,6 +278,7 @@ def test_sqlite_backup_is_created_before_schema_changes(tmp_path):
     backup_tables = set(inspect(backup_engine).get_table_names())
     assert backup_tables == {"legacy_marker"}
     with backup_engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT value FROM legacy_marker")
-        ).scalar_one() == "preserved"
+        assert (
+            connection.execute(text("SELECT value FROM legacy_marker")).scalar_one()
+            == "preserved"
+        )

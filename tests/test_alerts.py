@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 
 from cloudhelm.alerts import (
     _node_value,
+    alert_recipient_userids,
     evaluate_heartbeat_alerts,
     evaluate_offline_alerts,
     evaluate_service_business_alerts,
+    format_notification_time,
     seed_default_alert_rules,
     send_alert_notification,
     update_node_alert_baselines,
@@ -104,9 +106,7 @@ def test_alerts_create_only_transition_events_and_recover(tmp_path):
         db.commit()
         disk_events = list(
             db.scalars(
-                select(AlertEvent).where(
-                    AlertEvent.metric == "node_disk_percent"
-                )
+                select(AlertEvent).where(AlertEvent.metric == "node_disk_percent")
             ).all()
         )
         assert len(disk_events) == 1
@@ -132,9 +132,7 @@ def test_alerts_create_only_transition_events_and_recover(tmp_path):
         assert (
             len(
                 db.scalars(
-                    select(AlertEvent).where(
-                        AlertEvent.status == AlertStatus.recovered
-                    )
+                    select(AlertEvent).where(AlertEvent.status == AlertStatus.recovered)
                 ).all()
             )
             == 2
@@ -185,11 +183,14 @@ def test_extended_default_rules_are_seeded_once(tmp_path):
         db.delete(removed)
         db.commit()
         seed_default_alert_rules(db, settings)
-        assert db.scalar(
-            select(AlertRule).where(
-                AlertRule.metric == "container_disk_growth_mibps"
+        assert (
+            db.scalar(
+                select(AlertRule).where(
+                    AlertRule.metric == "container_disk_growth_mibps"
+                )
             )
-        ) is None
+            is None
+        )
 
 
 def test_service_business_overload_waits_for_window_and_recovers(tmp_path):
@@ -211,9 +212,7 @@ def test_service_business_overload_waits_for_window_and_recovers(tmp_path):
         db.flush()
 
         assert (
-            evaluate_service_business_alerts(
-                db, service, 10, False, now, settings
-            )
+            evaluate_service_business_alerts(db, service, 10, False, now, settings)
             == []
         )
         triggered = evaluate_service_business_alerts(
@@ -244,6 +243,115 @@ def test_service_business_overload_waits_for_window_and_recovers(tmp_path):
             AlertStatus.recovered,
         ]
         assert all(event.target_id == service.id for event in events)
+
+
+def test_ai_service_alert_permission_controls_visibility_and_delivery(
+    client, admin_headers, session_for
+):
+    with SessionLocal() as db:
+        service = ScalingService(
+            name="授权测试 VLM",
+            service_type="vlm",
+            report_token_hash="hash",
+            workload_name="permission-vlm",
+        )
+        subscriber = User(
+            username="service-alert-subscriber",
+            wecom_userid="service-alert-subscriber",
+            display_name="AI 告警订阅人",
+            role=UserRole.viewer,
+            resource_restricted=True,
+        )
+        hidden = User(
+            username="service-alert-hidden",
+            wecom_userid="service-alert-hidden",
+            display_name="无 AI 告警权限",
+            role=UserRole.viewer,
+            resource_restricted=True,
+        )
+        rule = db.scalar(
+            select(AlertRule).where(
+                AlertRule.metric == "service_business_overload_percent"
+            )
+        )
+        assert rule is not None
+        db.add_all([service, subscriber, hidden])
+        db.flush()
+        service_id = service.id
+        subscriber_id = subscriber.id
+        hidden_id = hidden.id
+        db.commit()
+
+    resources = client.get("/api/v1/access/resources", headers=admin_headers)
+    assert resources.status_code == 200
+    assert service_id in {item["id"] for item in resources.json()["services"]}
+    current = client.get(f"/api/v1/users/{subscriber_id}/access", headers=admin_headers)
+    granted = client.put(
+        f"/api/v1/users/{subscriber_id}/access",
+        headers=admin_headers,
+        json={
+            "restricted": True,
+            "expected_version": current.json()["version"],
+            "rules": [
+                {
+                    "scope_type": "service",
+                    "service_id": service_id,
+                    "can_view": True,
+                    "alert_notify": True,
+                }
+            ],
+        },
+    )
+    assert granted.status_code == 200
+
+    with SessionLocal() as db:
+        rule = db.scalar(
+            select(AlertRule).where(
+                AlertRule.metric == "service_business_overload_percent"
+            )
+        )
+        assert rule is not None
+        event = AlertEvent(
+            rule_id=rule.id,
+            target_type="service",
+            target_id=service_id,
+            node_id=service_id,
+            target_name="授权测试 VLM",
+            rule_name=rule.name,
+            status=AlertStatus.triggered,
+            severity="critical",
+            metric=rule.metric,
+            value=120,
+            threshold=100,
+            message="AI 服务容量持续超限",
+        )
+        db.add(event)
+        db.commit()
+        event_id = event.id
+        assert "service-alert-subscriber" in alert_recipient_userids(db, event)
+        assert "service-alert-hidden" not in alert_recipient_userids(db, event)
+
+    subscriber_headers = session_for("service-alert-subscriber")
+    visible = client.get("/api/v1/alerts/events", headers=subscriber_headers)
+    assert event_id in {item["id"] for item in visible.json()}
+    hidden_headers = session_for("service-alert-hidden")
+    invisible = client.get("/api/v1/alerts/events", headers=hidden_headers)
+    assert event_id not in {item["id"] for item in invisible.json()}
+
+    with SessionLocal() as db:
+        db.execute(delete(AlertEvent).where(AlertEvent.id == event_id))
+        db.execute(delete(AccessRule).where(AccessRule.user_id == subscriber_id))
+        db.execute(delete(User).where(User.id.in_([subscriber_id, hidden_id])))
+        db.execute(delete(ScalingService).where(ScalingService.id == service_id))
+        db.commit()
+
+
+def test_notification_time_uses_configured_timezone():
+    settings = get_settings().model_copy(update={"display_timezone": "Asia/Shanghai"})
+    assert (
+        format_notification_time(datetime(2026, 8, 24, 9, 30, tzinfo=UTC), settings)
+        == "2026-08-24 17:30:00 Asia/Shanghai (UTC+08:00)"
+    )
 
 
 def test_extended_alert_metrics_trigger_and_recover(tmp_path):
@@ -401,9 +509,10 @@ def test_gpu_monitor_disabled_after_baseline_counts_as_missing():
         agent_token_hash="hash",
         gpu_expected_count=2,
     )
-    assert _node_value(
-        "node_gpu_missing", HeartbeatRequest(gpu_status="disabled"), node
-    ) == 2
+    assert (
+        _node_value("node_gpu_missing", HeartbeatRequest(gpu_status="disabled"), node)
+        == 2
+    )
 
 
 def test_host_metrics_unavailable_requires_two_reports(tmp_path):
@@ -426,9 +535,7 @@ def test_host_metrics_unavailable_requires_two_reports(tmp_path):
         db.add_all([rule, node])
         db.commit()
         unavailable = HeartbeatRequest(system_metrics_status="error")
-        assert evaluate_heartbeat_alerts(
-            db, node, [], unavailable, now, settings
-        ) == []
+        assert evaluate_heartbeat_alerts(db, node, [], unavailable, now, settings) == []
         triggered = evaluate_heartbeat_alerts(
             db, node, [], unavailable, now + timedelta(seconds=15), settings
         )
@@ -489,9 +596,7 @@ def test_admin_can_manage_alert_rules(client, admin_headers, session_for):
         viewer_user.resource_restricted = False
         db.commit()
     viewer_headers = session_for("alert-viewer")
-    assert client.get(
-        "/api/v1/alerts/rules", headers=viewer_headers
-    ).status_code == 403
+    assert client.get("/api/v1/alerts/rules", headers=viewer_headers).status_code == 403
     with SessionLocal() as db:
         db.add(
             AlertEvent(
@@ -512,18 +617,21 @@ def test_admin_can_manage_alert_rules(client, admin_headers, session_for):
         db.commit()
     events = client.get("/api/v1/alerts/events", headers=viewer_headers)
     assert events.status_code == 200
-    event = next(item for item in events.json() if item["target_id"] == "viewer-alert-node")
+    event = next(
+        item for item in events.json() if item["target_id"] == "viewer-alert-node"
+    )
     assert event["can_acknowledge"] is False
-    assert client.post(
-        f"/api/v1/alerts/events/{event['id']}/acknowledge",
-        headers=viewer_headers,
-    ).status_code == 403
+    assert (
+        client.post(
+            f"/api/v1/alerts/events/{event['id']}/acknowledge",
+            headers=viewer_headers,
+        ).status_code
+        == 403
+    )
 
 
 def test_wecom_alert_notification_records_delivery(monkeypatch):
-    settings = get_settings().model_copy(
-        update={"alert_notifications_enabled": True}
-    )
+    settings = get_settings().model_copy(update={"alert_notifications_enabled": True})
     with SessionLocal() as db:
         rule = db.scalar(select(AlertRule).where(AlertRule.name == "节点离线"))
         assert rule is not None
@@ -634,6 +742,7 @@ def test_wecom_alert_notification_records_delivery(monkeypatch):
 
     assert sent["params"] == {"access_token": "test-access-token"}
     assert sent["json"]["touser"] == "admin-wecom-id|operator-wecom-id"
+    assert "Asia/Shanghai (UTC+08:00)" in sent["json"]["text"]["content"]
     with SessionLocal() as db:
         delivered = db.get(AlertEvent, event_id)
         assert delivered is not None
@@ -721,9 +830,7 @@ def test_admin_test_alert_uses_real_resource_subscriptions(
             enabled=settings.alert_notifications_enabled,
         )
 
-    settings = get_settings().model_copy(
-        update={"alert_notifications_enabled": True}
-    )
+    settings = get_settings().model_copy(update={"alert_notifications_enabled": True})
     monkeypatch.setattr("cloudhelm.routers.api.send_wecom_text", fake_send)
     client.app.dependency_overrides[get_settings] = lambda: settings
     try:
@@ -741,13 +848,12 @@ def test_admin_test_alert_uses_real_resource_subscriptions(
     assert sent["enabled"] is True
     assert "规则：模拟节点内存告警" in sent["content"]
     assert "不代表真实故障" in sent["content"]
+    assert "Asia/Shanghai (UTC+08:00)" in sent["content"]
 
     audit = client.get("/api/v1/audit?limit=20", headers=admin_headers)
     assert audit.status_code == 200
     item = next(
-        row
-        for row in audit.json()
-        if row["action"] == "alert.notification.test"
+        row for row in audit.json() if row["action"] == "alert.notification.test"
     )
     assert item["action_label"] == "发送模拟告警"
     assert item["target_type_label"] == "告警规则"
@@ -762,14 +868,8 @@ def test_admin_test_alert_uses_real_resource_subscriptions(
         )
         assert subscriber is not None
         db.execute(delete(AccessRule).where(AccessRule.user_id == subscriber.id))
-        db.execute(
-            delete(AuditLog).where(
-                AuditLog.action == "alert.notification.test"
-            )
-        )
+        db.execute(delete(AuditLog).where(AuditLog.action == "alert.notification.test"))
         db.execute(delete(AlertRule).where(AlertRule.id == rule_id))
-        db.execute(
-            delete(Node).where(Node.agent_key == "simulated-alert-node-agent")
-        )
+        db.execute(delete(Node).where(Node.agent_key == "simulated-alert-node-agent"))
         db.delete(subscriber)
         db.commit()

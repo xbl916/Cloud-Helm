@@ -8,12 +8,17 @@ from sqlalchemy import delete, select, update
 
 from cloudhelm.access import (
     can_access,
+    can_access_service,
     can_manage_resources,
     can_view_node_metrics,
     load_access_rules,
     visible_inventory,
 )
-from cloudhelm.alerts import alert_test_delivery, send_wecom_text
+from cloudhelm.alerts import (
+    alert_test_delivery,
+    format_notification_time,
+    send_wecom_text,
+)
 from cloudhelm.audit import (
     add_audit,
     audit_action_label,
@@ -155,13 +160,17 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
         and node.system_metrics_status == "ok"
     ]
     visible_container_ids = {item.id for item in containers}
-    business_instances = list(
-        db.scalars(
-            select(ServiceInstance).where(
-                ServiceInstance.container_id.in_(visible_container_ids)
-            )
-        ).all()
-    ) if visible_container_ids else []
+    business_instances = (
+        list(
+            db.scalars(
+                select(ServiceInstance).where(
+                    ServiceInstance.container_id.in_(visible_container_ids)
+                )
+            ).all()
+        )
+        if visible_container_ids
+        else []
+    )
     return {
         "nodes": {
             "total": len(nodes),
@@ -242,9 +251,7 @@ def list_nodes(db: Db, settings: Config, user: CurrentUser) -> list[dict]:
                 "agent_version": node.agent_version,
                 "docker_version": node.docker_version,
                 "os": node.os,
-                "gpu_status": node.gpu_status
-                if gpu_metrics_visible
-                else "restricted",
+                "gpu_status": node.gpu_status if gpu_metrics_visible else "restricted",
                 "gpu_error": node.gpu_error if gpu_metrics_visible else None,
                 "gpu_updated_at": _iso(node.gpu_updated_at)
                 if gpu_metrics_visible
@@ -287,7 +294,10 @@ def list_containers(node_id: str, db: Db, user: CurrentUser) -> list[dict]:
     if not visible and not can_access(user, rules, node, permission="view"):
         raise HTTPException(status_code=404, detail="节点不存在")
     return [
-        {**_container_dict(item), "business_loads": _container_business_loads(db, item.id)}
+        {
+            **_container_dict(item),
+            "business_loads": _container_business_loads(db, item.id),
+        }
         for item in visible
     ]
 
@@ -306,7 +316,9 @@ def update_node_gateway_address(
         raise HTTPException(status_code=404, detail="节点不存在")
     if payload.gateway_address and settings.gateway_discovery_networks:
         address = ipaddress.ip_address(payload.gateway_address)
-        if not any(address in network for network in settings.gateway_discovery_networks):
+        if not any(
+            address in network for network in settings.gateway_discovery_networks
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="节点网关访问 IP 不在允许发布的网段内",
@@ -448,8 +460,7 @@ def _container_business_loads(db: Db, container_id: str) -> list[dict]:
             "instance_id": instance.instance_id,
             "pool": instance.pool,
             "active_businesses": instance.active_businesses,
-            "capacity_limit": instance.capacity_limit
-            or service.capacity_per_replica,
+            "capacity_limit": instance.capacity_limit or service.capacity_per_replica,
             "healthy": instance.healthy,
             "ready": instance.ready,
             "accepting": instance.accepting,
@@ -797,9 +808,7 @@ async def test_alert_notification(
     recipient_users = list(
         db.scalars(select(User).where(User.wecom_userid.in_(recipients))).all()
     )
-    names_by_userid = {
-        user.wecom_userid: user.display_name for user in recipient_users
-    }
+    names_by_userid = {user.wecom_userid: user.display_name for user in recipient_users}
     recipient_names = [names_by_userid.get(userid, userid) for userid in recipients]
     content = (
         "【云舵模拟告警】\n"
@@ -807,7 +816,7 @@ async def test_alert_notification(
         f"规则：{rule.name}\n"
         f"模拟资源：{target_name}\n"
         f"操作人：{admin.display_name}\n"
-        f"时间：{now.isoformat()}"
+        f"时间：{format_notification_time(now, settings)}"
     )
     try:
         await send_wecom_text(recipients, content, settings)
@@ -937,13 +946,18 @@ def _can_access_alert(
         return False
     if not user.resource_restricted:
         return True
+    if event.target_type == "service":
+        return can_access_service(
+            user,
+            load_access_rules(db, user),
+            event.target_id,
+            "operate" if permission == "operate" else "view",
+        )
     node = db.get(Node, event.node_id)
     if not node:
         return False
     container = (
-        db.get(Container, event.target_id)
-        if event.target_type == "container"
-        else None
+        db.get(Container, event.target_id) if event.target_type == "container" else None
     )
     return can_access(user, load_access_rules(db, user), node, container, permission)
 
@@ -1031,7 +1045,7 @@ def acknowledge_alert_event(
 
 
 @router.get("/users")
-def list_users(db: Db, manager: CurrentUser) -> list[dict]:
+def list_users(db: Db, settings: Config, manager: CurrentUser) -> list[dict]:
     if not can_manage_resources(db, manager):
         raise HTTPException(status_code=403, detail="需要全局或资源管理权限")
     global_admin = manager.role == UserRole.admin
@@ -1056,6 +1070,11 @@ def list_users(db: Db, manager: CurrentUser) -> list[dict]:
             "global_alert_notifications": user.alert_notifications,
             "alert_subscription_count": alert_counts.get(user.id, 0),
             "can_edit_account": global_admin and user.id != manager.id,
+            "can_edit_role": (
+                global_admin
+                and manager.wecom_userid == settings.bootstrap_admin_wecom_userid
+                and user.id != manager.id
+            ),
             "can_edit_access": (
                 global_admin
                 or (
@@ -1124,6 +1143,11 @@ def update_user(
         raise HTTPException(status_code=409, detail="不能降低当前登录账号的角色")
     if user.id == admin.id and payload.wecom_userid is not None:
         raise HTTPException(status_code=409, detail="不能修改当前登录账号的企微绑定")
+    role_changes = payload.role is not None and payload.role != user.role
+    if role_changes and admin.wecom_userid != settings.bootstrap_admin_wecom_userid:
+        raise HTTPException(
+            status_code=403, detail="只有系统初始管理员可以修改账号角色"
+        )
     removes_admin = user.role == UserRole.admin and (
         payload.role not in (None, UserRole.admin) or payload.is_active is False
     )
@@ -1143,6 +1167,24 @@ def update_user(
     if payload.display_name is not None:
         user.display_name = payload.display_name
     was_admin = user.role == UserRole.admin
+    has_elevated_access = db.scalar(
+        select(AccessRule.id)
+        .where(
+            AccessRule.user_id == user.id,
+            (AccessRule.can_operate.is_(True) | AccessRule.can_manage.is_(True)),
+        )
+        .limit(1)
+    )
+    if (
+        role_changes
+        and payload.role == UserRole.viewer
+        and has_elevated_access
+        and payload.elevated_access_action is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="请由系统初始管理员明确选择保留或清除原配置/发布授权",
+        )
     if payload.role is not None:
         user.role = payload.role
         if payload.role == UserRole.admin:
@@ -1152,11 +1194,14 @@ def update_user(
             if was_admin:
                 user.resource_restricted = True
                 user.alert_notifications = False
-            if payload.role == UserRole.viewer:
+            if (
+                payload.role == UserRole.viewer
+                and payload.elevated_access_action == "clear"
+            ):
                 db.execute(
                     update(AccessRule)
                     .where(AccessRule.user_id == user.id)
-                    .values(can_manage=False)
+                    .values(can_operate=False, can_manage=False)
                 )
     if payload.is_active is not None:
         user.is_active = payload.is_active
@@ -1249,6 +1294,7 @@ def _rule_identity(rule: AccessRuleInput) -> tuple:
         rule.node_id,
         rule.project,
         rule.container_id,
+        rule.service_id,
     )
 
 
@@ -1256,6 +1302,7 @@ def _validate_rule(
     payload: AccessRuleInput,
     nodes: dict[str, Node],
     containers: dict[str, Container],
+    services: dict[str, ScalingService],
 ) -> dict:
     elevated = payload.can_manage
     values = {
@@ -1264,6 +1311,7 @@ def _validate_rule(
         "node_id": None,
         "project": None,
         "container_id": None,
+        "service_id": None,
         "can_view": (
             payload.can_view or payload.can_logs or payload.can_operate or elevated
         ),
@@ -1279,6 +1327,18 @@ def _validate_rule(
         if not payload.environment or payload.environment not in environments:
             raise HTTPException(status_code=422, detail="授权环境不存在")
         values["environment"] = payload.environment
+        return values
+    if payload.scope_type == "service":
+        service = services.get(payload.service_id or "")
+        if not service:
+            raise HTTPException(status_code=422, detail="授权 AI 服务不存在")
+        if payload.can_logs:
+            raise HTTPException(status_code=422, detail="AI 服务权限不支持容器日志权限")
+        values["service_id"] = service.id
+        values["can_view"] = True
+        values["can_logs"] = False
+        values["can_operate"] = payload.can_operate or payload.can_manage
+        values["can_manage"] = payload.can_manage
         return values
     if not payload.node_id or payload.node_id not in nodes:
         raise HTTPException(status_code=422, detail="授权节点不存在")
@@ -1316,6 +1376,7 @@ def _scope_key(rule: AccessRule | dict) -> str:
             "node_id",
             "project",
             "container_id",
+            "service_id",
         )
     )
 
@@ -1350,8 +1411,7 @@ def _scope_contains(
         if candidate_type == "environment":
             return manager_rule.environment == _scope_value(candidate, "environment")
         return bool(
-            candidate_node
-            and manager_rule.environment == candidate_node.environment
+            candidate_node and manager_rule.environment == candidate_node.environment
         )
     if manager_type == "node":
         return manager_rule.node_id == candidate_node_id
@@ -1394,9 +1454,10 @@ def _can_manage_scope(
     nodes: dict[str, Node],
     containers: dict[str, Container],
 ) -> bool:
+    if str(_scope_value(candidate, "scope_type")) == "service":
+        return manager.role == UserRole.admin
     return manager.role == UserRole.admin or any(
-        _scope_contains(rule, candidate, nodes, containers)
-        for rule in management_rules
+        _scope_contains(rule, candidate, nodes, containers) for rule in management_rules
     )
 
 
@@ -1407,6 +1468,7 @@ def _serialized_rule(rule: AccessRule | dict) -> dict:
         "node_id": _scope_value(rule, "node_id"),
         "project": _scope_value(rule, "project"),
         "container_id": _scope_value(rule, "container_id"),
+        "service_id": _scope_value(rule, "service_id"),
         "can_view": bool(_scope_value(rule, "can_view")),
         "can_logs": bool(_scope_value(rule, "can_logs")),
         "can_operate": bool(_scope_value(rule, "can_operate")),
@@ -1439,7 +1501,10 @@ def _prepare_access_change(
         raise HTTPException(status_code=403, detail="不能修改该账号的资源范围")
     if scoped_manager and not payload.restricted:
         raise HTTPException(status_code=403, detail="资源管理员不能授予全部资源")
-    if payload.expected_version is not None and payload.expected_version != user.access_version:
+    if (
+        payload.expected_version is not None
+        and payload.expected_version != user.access_version
+    ):
         raise HTTPException(
             status_code=409,
             detail="资源权限已被其他管理员修改，请刷新后重新确认",
@@ -1447,14 +1512,24 @@ def _prepare_access_change(
 
     nodes = {node.id: node for node in db.scalars(select(Node)).all()}
     containers = {item.id: item for item in db.scalars(select(Container)).all()}
+    services = {
+        service.id: service for service in db.scalars(select(ScalingService)).all()
+    }
     deduplicated = {_rule_identity(rule): rule for rule in payload.rules}
     validated = (
-        [_validate_rule(rule, nodes, containers) for rule in deduplicated.values()]
+        [
+            _validate_rule(rule, nodes, containers, services)
+            for rule in deduplicated.values()
+        ]
         if payload.restricted
         else []
     )
     if user.role != UserRole.operator and any(item["can_manage"] for item in validated):
         raise HTTPException(status_code=422, detail="只有运维角色可以设为资源管理员")
+    if user.role != UserRole.operator and any(
+        item["scope_type"] == "service" and item["can_operate"] for item in validated
+    ):
+        raise HTTPException(status_code=422, detail="只有运维角色可以配置 AI 服务")
     management_rules = _management_rules(db, manager)
     if scoped_manager and any(
         not _can_manage_scope(manager, management_rules, item, nodes, containers)
@@ -1468,9 +1543,7 @@ def _prepare_access_change(
         [
             rule
             for rule in existing
-            if _can_manage_scope(
-                manager, management_rules, rule, nodes, containers
-            )
+            if _can_manage_scope(manager, management_rules, rule, nodes, containers)
         ]
         if scoped_manager
         else existing
@@ -1502,9 +1575,9 @@ def _access_diff(existing: list[AccessRule], validated: list[dict]) -> dict:
         or bool(_scope_value(before[key], "alert_notify"))
         != bool(_scope_value(after[key], "alert_notify"))
     ]
-    elevated = sum(
-        item["level"] == "manage" for item in added
-    ) + sum(item["to"] == "manage" and item["from"] != "manage" for item in changed)
+    elevated = sum(item["level"] == "manage" for item in added) + sum(
+        item["to"] == "manage" and item["from"] != "manage" for item in changed
+    )
     notification_changes = sum(
         item["from_alert_notify"] != item["to_alert_notify"] for item in changed
     )
@@ -1543,6 +1616,9 @@ def access_resources(db: Db, manager: CurrentUser) -> dict:
             .where(Container.present.is_(True))
             .order_by(Container.compose_project, Container.name)
         ).all()
+    )
+    all_services = list(
+        db.scalars(select(ScalingService).order_by(ScalingService.name)).all()
     )
     nodes_by_id = {node.id: node for node in all_nodes}
     containers_by_id = {item.id: item for item in all_containers}
@@ -1618,6 +1694,19 @@ def access_resources(db: Db, manager: CurrentUser) -> dict:
         }
         if manageable(candidate):
             editable_scope_keys.add(_scope_key(candidate))
+    services = []
+    for service in all_services:
+        candidate = {"scope_type": "service", "service_id": service.id}
+        if manageable(candidate):
+            editable_scope_keys.add(_scope_key(candidate))
+            services.append(
+                {
+                    "id": service.id,
+                    "name": service.name,
+                    "service_type": service.service_type,
+                    "status": service.status,
+                }
+            )
     return {
         "environments": sorted({node.environment for node in nodes}),
         "partial": manager.role != UserRole.admin,
@@ -1633,6 +1722,7 @@ def access_resources(db: Db, manager: CurrentUser) -> dict:
             }
             for node in nodes
         ],
+        "services": services,
     }
 
 
@@ -1664,9 +1754,7 @@ def get_user_access(user_id: str, db: Db, manager: CurrentUser) -> dict:
         rules = [
             rule
             for rule in all_rules
-            if _can_manage_scope(
-                manager, management_rules, rule, nodes, containers
-            )
+            if _can_manage_scope(manager, management_rules, rule, nodes, containers)
         ]
     else:
         rules = all_rules
@@ -1841,9 +1929,7 @@ def update_user_access(
     if scoped_manager:
         removed = 0
         for rule in existing:
-            if _can_manage_scope(
-                manager, management_rules, rule, nodes, containers
-            ):
+            if _can_manage_scope(manager, management_rules, rule, nodes, containers):
                 db.delete(rule)
                 removed += 1
     else:
@@ -1954,7 +2040,11 @@ def list_resource_managers(
         select(AccessRule).where(AccessRule.can_manage.is_(True))
     ).all():
         user = users.get(rule.user_id)
-        if user and user.is_active and _scope_contains(rule, candidate, nodes, containers):
+        if (
+            user
+            and user.is_active
+            and _scope_contains(rule, candidate, nodes, containers)
+        ):
             sources_by_user.setdefault(user.id, []).append(_scope_key(rule))
     entries.extend(
         {

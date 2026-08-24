@@ -76,9 +76,7 @@ class WebSession(Base):
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    auth_method: Mapped[str] = mapped_column(
-        String(30), default="wecom_h5", index=True
-    )
+    auth_method: Mapped[str] = mapped_column(String(30), default="wecom_h5", index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
@@ -133,16 +131,12 @@ class Node(Base):
     gpu_expected_count: Mapped[int] = mapped_column(Integer, default=0)
     network_baseline_bps: Mapped[float] = mapped_column(Float, default=0.0)
     network_baseline_samples: Mapped[int] = mapped_column(Integer, default=0)
-    network_surge_percent: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    network_surge_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     system_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     system_metrics_status: Mapped[str] = mapped_column(
         String(20), default="unavailable"
     )
-    system_metrics_error: Mapped[str | None] = mapped_column(
-        String(500), nullable=True
-    )
+    system_metrics_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     system_metrics_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -303,9 +297,7 @@ class AlertRuleSeed(Base):
     __tablename__ = "alert_rule_seeds"
 
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
-    seeded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
+    seeded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AlertState(Base):
@@ -403,6 +395,9 @@ class AccessRule(Base):
     container_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True
     )
+    service_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
     can_view: Mapped[bool] = mapped_column(Boolean, default=True)
     can_logs: Mapped[bool] = mapped_column(Boolean, default=False)
     can_operate: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -423,7 +418,9 @@ class ScalingService(Base):
     service_type: Mapped[str] = mapped_column(String(20), default="other", index=True)
     report_token_hash: Mapped[str] = mapped_column(String(512))
     capacity_per_replica: Mapped[int] = mapped_column(Integer, default=1)
-    autoscaling_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    autoscaling_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, index=True
+    )
     min_replicas: Mapped[int] = mapped_column(Integer, default=1)
     max_replicas: Mapped[int] = mapped_column(Integer, default=1)
     scale_up_threshold_percent: Mapped[float] = mapped_column(Float, default=70.0)
@@ -534,7 +531,9 @@ class BusinessMetricSample(Base):
 
 class ScalingEvent(Base):
     __tablename__ = "scaling_events"
-    __table_args__ = (Index("ix_scaling_events_service_time", "service_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_scaling_events_service_time", "service_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     service_id: Mapped[str] = mapped_column(

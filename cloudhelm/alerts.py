@@ -1,12 +1,13 @@
 import json
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from cloudhelm.access import can_receive_alert
+from cloudhelm.access import can_receive_alert, can_receive_service_alert
 from cloudhelm.config import Settings
 from cloudhelm.models import (
     AccessRule,
@@ -68,27 +69,179 @@ NETWORK_SURGE_MIN_BPS = 10 * 1024 * 1024
 NETWORK_BASELINE_FLOOR_BPS = 1024 * 1024
 
 
+def format_notification_time(value: datetime, settings: Settings) -> str:
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    localized = aware.astimezone(ZoneInfo(settings.display_timezone))
+    offset = localized.strftime("%z")
+    offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
+    return f"{localized:%Y-%m-%d %H:%M:%S} {settings.display_timezone} (UTC{offset})"
+
+
 def seed_default_alert_rules(db: Session, settings: Settings) -> None:
     defaults = [
-        ("node-offline", "节点离线", "node_offline", float(settings.node_offline_seconds), 1, "critical", True),
-        ("node-memory", "节点内存过高", "node_memory_percent", 90.0, 3, "warning", True),
-        ("node-disk", "节点根磁盘空间不足", "node_disk_percent", 90.0, 1, "critical", True),
-        ("node-inode", "节点 inode 空间不足", "node_inode_percent", 90.0, 1, "critical", True),
-        ("container-memory", "容器内存过高", "container_memory_percent", 95.0, 3, "warning", True),
-        ("container-health", "容器健康检查失败", "container_unhealthy", 1.0, 1, "critical", True),
-        ("container-oom", "容器发生 OOM Kill", "container_oom_killed", 1.0, 1, "critical", True),
-        ("container-restarting", "容器反复重启", "container_restarting", 1.0, 2, "warning", True),
-        ("gpu-utilization", "GPU 使用率过高", "node_gpu_utilization_percent", 98.0, 4, "warning", False),
-        ("gpu-memory", "GPU 显存使用率过高", "node_gpu_memory_percent", 95.0, 3, "warning", False),
-        ("gpu-temperature", "GPU 温度过高", "node_gpu_temperature_c", 85.0, 2, "critical", True),
-        ("gpu-missing", "GPU 掉卡或监控异常", "node_gpu_missing", 1.0, 2, "critical", True),
-        ("network-surge", "节点网络流量突增", "node_network_surge_percent", 300.0, 1, "warning", False),
-        ("container-disk-growth", "容器可写层增长过快", "container_disk_growth_mibps", 1.0, 1, "warning", False),
-        ("container-exit", "容器异常退出", "container_exit_abnormal", 1.0, 1, "critical", True),
+        (
+            "node-offline",
+            "节点离线",
+            "node_offline",
+            float(settings.node_offline_seconds),
+            1,
+            "critical",
+            True,
+        ),
+        (
+            "node-memory",
+            "节点内存过高",
+            "node_memory_percent",
+            90.0,
+            3,
+            "warning",
+            True,
+        ),
+        (
+            "node-disk",
+            "节点根磁盘空间不足",
+            "node_disk_percent",
+            90.0,
+            1,
+            "critical",
+            True,
+        ),
+        (
+            "node-inode",
+            "节点 inode 空间不足",
+            "node_inode_percent",
+            90.0,
+            1,
+            "critical",
+            True,
+        ),
+        (
+            "container-memory",
+            "容器内存过高",
+            "container_memory_percent",
+            95.0,
+            3,
+            "warning",
+            True,
+        ),
+        (
+            "container-health",
+            "容器健康检查失败",
+            "container_unhealthy",
+            1.0,
+            1,
+            "critical",
+            True,
+        ),
+        (
+            "container-oom",
+            "容器发生 OOM Kill",
+            "container_oom_killed",
+            1.0,
+            1,
+            "critical",
+            True,
+        ),
+        (
+            "container-restarting",
+            "容器反复重启",
+            "container_restarting",
+            1.0,
+            2,
+            "warning",
+            True,
+        ),
+        (
+            "gpu-utilization",
+            "GPU 使用率过高",
+            "node_gpu_utilization_percent",
+            98.0,
+            4,
+            "warning",
+            False,
+        ),
+        (
+            "gpu-memory",
+            "GPU 显存使用率过高",
+            "node_gpu_memory_percent",
+            95.0,
+            3,
+            "warning",
+            False,
+        ),
+        (
+            "gpu-temperature",
+            "GPU 温度过高",
+            "node_gpu_temperature_c",
+            85.0,
+            2,
+            "critical",
+            True,
+        ),
+        (
+            "gpu-missing",
+            "GPU 掉卡或监控异常",
+            "node_gpu_missing",
+            1.0,
+            2,
+            "critical",
+            True,
+        ),
+        (
+            "network-surge",
+            "节点网络流量突增",
+            "node_network_surge_percent",
+            300.0,
+            1,
+            "warning",
+            False,
+        ),
+        (
+            "container-disk-growth",
+            "容器可写层增长过快",
+            "container_disk_growth_mibps",
+            1.0,
+            1,
+            "warning",
+            False,
+        ),
+        (
+            "container-exit",
+            "容器异常退出",
+            "container_exit_abnormal",
+            1.0,
+            1,
+            "critical",
+            True,
+        ),
         ("node-load", "宿主机负载过高", "node_load_percent", 150.0, 4, "warning", True),
-        ("node-swap", "宿主机 Swap 使用率过高", "node_swap_percent", 80.0, 3, "warning", True),
-        ("node-metrics", "宿主机指标采集失效", "node_metrics_unavailable", 1.0, 2, "critical", True),
-        ("service-business-overload", "AI 服务业务容量超限", "service_business_overload_percent", 100.0, 1, "critical", True),
+        (
+            "node-swap",
+            "宿主机 Swap 使用率过高",
+            "node_swap_percent",
+            80.0,
+            3,
+            "warning",
+            True,
+        ),
+        (
+            "node-metrics",
+            "宿主机指标采集失效",
+            "node_metrics_unavailable",
+            1.0,
+            2,
+            "critical",
+            True,
+        ),
+        (
+            "service-business-overload",
+            "AI 服务业务容量超限",
+            "service_business_overload_percent",
+            100.0,
+            1,
+            "critical",
+            True,
+        ),
     ]
     for key, name, metric, threshold, consecutive, severity, enabled in defaults:
         if db.get(AlertRuleSeed, key):
@@ -116,8 +269,7 @@ def update_node_alert_baselines(node: Node, payload: HeartbeatRequest) -> None:
         node.network_surge_percent = None
         return
     current = (
-        payload.system_metrics.network_rx_bps
-        + payload.system_metrics.network_tx_bps
+        payload.system_metrics.network_rx_bps + payload.system_metrics.network_tx_bps
     )
     baseline = node.network_baseline_bps or 0.0
     samples = node.network_baseline_samples or 0
@@ -149,9 +301,7 @@ def _percent(used: float, total: float) -> float:
     return float(used) / float(total) * 100 if total else 0.0
 
 
-def _node_value(
-    metric: str, payload: HeartbeatRequest, node: Node
-) -> float | None:
+def _node_value(metric: str, payload: HeartbeatRequest, node: Node) -> float | None:
     if metric == "node_metrics_unavailable":
         return float(payload.system_metrics_status != "ok")
     if metric == "node_gpu_missing":
@@ -229,7 +379,9 @@ def _container_value(metric: str, container: Container) -> float | None:
 def _is_breached(rule: AlertRule, value: float) -> bool:
     if rule.metric == "service_business_overload_percent":
         return value > rule.threshold
-    return value >= rule.threshold if rule.operator == "gte" else value <= rule.threshold
+    return (
+        value >= rule.threshold if rule.operator == "gte" else value <= rule.threshold
+    )
 
 
 def _event_message(
@@ -500,22 +652,19 @@ def alert_recipient_userids_for_target(
 
 def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
     if event.target_type == "service":
-        return list(
-            db.scalars(
-                select(User.wecom_userid).where(
-                    User.is_active.is_(True),
-                    User.resource_restricted.is_(False),
-                    User.alert_notifications.is_(True),
-                )
-            ).all()
+        users, rules_by_user = _alert_recipient_context(db)
+        return sorted(
+            user.wecom_userid
+            for user in users
+            if can_receive_service_alert(
+                user, rules_by_user.get(user.id, []), event.target_id
+            )
         )
     node = db.get(Node, event.node_id)
     if not node:
         return []
     container = (
-        db.get(Container, event.target_id)
-        if event.target_type == "container"
-        else None
+        db.get(Container, event.target_id) if event.target_type == "container" else None
     )
     if event.target_type == "container" and not container:
         return []
@@ -561,14 +710,12 @@ def alert_test_delivery(
     deliveries = []
     for target, container in targets:
         if isinstance(target, ScalingService):
-            recipients = list(
-                db.scalars(
-                    select(User.wecom_userid).where(
-                        User.is_active.is_(True),
-                        User.resource_restricted.is_(False),
-                        User.alert_notifications.is_(True),
-                    )
-                ).all()
+            recipients = sorted(
+                user.wecom_userid
+                for user in users
+                if can_receive_service_alert(
+                    user, rules_by_user.get(user.id, []), target.id
+                )
             )
         else:
             recipients = _alert_recipient_userids(
@@ -591,7 +738,10 @@ async def send_alert_notification(event_id: str, settings: Settings) -> None:
         if not recipients:
             return
         try:
-            content = f"【云舵告警】\n{event.message}\n时间：{event.created_at.isoformat()}"
+            content = (
+                f"【云舵告警】\n{event.message}\n"
+                f"时间：{format_notification_time(event.created_at, settings)}"
+            )
             await send_wecom_text(recipients, content, settings)
             event.notified = True
             event.notification_error = None
@@ -609,9 +759,7 @@ async def send_wecom_text(
     if not recipients:
         raise ValueError("企微消息接收人不能为空")
     token = await _get_access_token(settings)
-    async with httpx.AsyncClient(
-        timeout=settings.wecom_api_timeout_seconds
-    ) as client:
+    async with httpx.AsyncClient(timeout=settings.wecom_api_timeout_seconds) as client:
         response = await client.post(
             f"{settings.wecom_api_base}/cgi-bin/message/send",
             params={"access_token": token},

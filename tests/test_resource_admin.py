@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from cloudhelm.db import SessionLocal
-from cloudhelm.models import Container, Node
+from cloudhelm.models import Container, Node, ScalingService
 
 
 def _create_user(
@@ -27,9 +27,7 @@ def test_global_admin_can_configure_own_alert_subscription(
     assert users.status_code == 200
     admin = next(item for item in users.json() if item["role"] == "admin")
     assert admin["can_edit_access"] is True
-    current = client.get(
-        f"/api/v1/users/{admin['id']}/access", headers=admin_headers
-    )
+    current = client.get(f"/api/v1/users/{admin['id']}/access", headers=admin_headers)
     assert current.status_code == 200
     enabled = client.put(
         f"/api/v1/users/{admin['id']}/access",
@@ -88,15 +86,21 @@ def test_scoped_manager_can_delegate_only_inside_own_container(
             image="example/b:1",
         )
         db.add_all([container_a, container_b])
+        service = ScalingService(
+            name="资源管理员不可授权的 AI 服务",
+            service_type="vlm",
+            report_token_hash="hash",
+            workload_name="restricted-manager-vlm",
+        )
+        db.add(service)
         db.commit()
         node_a_id = node_a.id
         node_b_id = node_b.id
         container_a_id = container_a.id
         container_b_id = container_b.id
+        service_id = service.id
 
-    manager = _create_user(
-        client, admin_headers, "resource.manager", "operator"
-    )
+    manager = _create_user(client, admin_headers, "resource.manager", "operator")
     target = _create_user(client, admin_headers, "resource.target", "operator")
     viewer = _create_user(client, admin_headers, "resource.viewer", "viewer")
 
@@ -141,16 +145,31 @@ def test_scoped_manager_can_delegate_only_inside_own_container(
     assert resources.status_code == 200
     assert resources.json()["partial"] is True
     assert resources.json()["allow_unrestricted"] is False
+    assert resources.json()["services"] == []
     assert [node["id"] for node in resources.json()["nodes"]] == [node_a_id]
     assert resources.json()["nodes"][0]["containers"][0]["id"] == container_a_id
 
     users = client.get("/api/v1/users", headers=manager_headers)
     assert users.status_code == 200
-    target_summary = next(
-        item for item in users.json() if item["id"] == target["id"]
-    )
+    target_summary = next(item for item in users.json() if item["id"] == target["id"])
     assert target_summary["can_edit_access"] is True
     assert target_summary["can_edit_account"] is False
+
+    service_outside_scope = client.put(
+        f"/api/v1/users/{target['id']}/access",
+        headers=manager_headers,
+        json={
+            "restricted": True,
+            "rules": [
+                {
+                    "scope_type": "service",
+                    "service_id": service_id,
+                    "alert_notify": True,
+                }
+            ],
+        },
+    )
+    assert service_outside_scope.status_code == 403
 
     delegated = client.put(
         f"/api/v1/users/{target['id']}/access",
@@ -246,8 +265,7 @@ def test_scoped_manager_can_delegate_only_inside_own_container(
     )
     assert admin_view.status_code == 200
     scopes = {
-        (rule["node_id"], rule["container_id"])
-        for rule in admin_view.json()["rules"]
+        (rule["node_id"], rule["container_id"]) for rule in admin_view.json()["rules"]
     }
     assert scopes == {
         (node_a_id, container_a_id),
@@ -270,14 +288,10 @@ def test_scoped_manager_can_delegate_only_inside_own_container(
         },
     )
     assert cannot_expand_to_node.status_code == 403
-    allowed = client.get(
-        f"/api/v1/containers/{container_a_id}", headers=target_headers
-    )
+    allowed = client.get(f"/api/v1/containers/{container_a_id}", headers=target_headers)
     assert allowed.status_code == 200
     assert allowed.json()["permissions"]["manage"] is True
-    other = client.get(
-        f"/api/v1/containers/{container_b_id}", headers=target_headers
-    )
+    other = client.get(f"/api/v1/containers/{container_b_id}", headers=target_headers)
     assert other.status_code == 200
     assert other.json()["permissions"]["manage"] is True
 
@@ -306,16 +320,19 @@ def test_access_preview_lock_effective_managers_and_emergency_revoke(
 
     manager = _create_user(client, admin_headers, "safety.manager", "operator")
     target = _create_user(client, admin_headers, "safety.target", "operator")
-    assert client.put(
-        f"/api/v1/users/{manager['id']}/access",
-        headers=admin_headers,
-        json={
-            "restricted": True,
-            "rules": [
-                {"scope_type": "node", "node_id": node_id, "can_manage": True}
-            ],
-        },
-    ).status_code == 200
+    assert (
+        client.put(
+            f"/api/v1/users/{manager['id']}/access",
+            headers=admin_headers,
+            json={
+                "restricted": True,
+                "rules": [
+                    {"scope_type": "node", "node_id": node_id, "can_manage": True}
+                ],
+            },
+        ).status_code
+        == 200
+    )
 
     manager_headers = session_for("safety.manager")
     initial = client.get(

@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.6" in compose
+    assert f"cloud-helm-{service}:0.9.7" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -47,9 +47,7 @@ def test_desktop_stylesheet_is_packaged_and_linked_after_module_styles():
     assert desktop_asset in page
     assert page.index(desktop_asset) > page.index("/assets/scaling.css")
 
-    desktop = (ROOT / "cloudhelm/static/assets/desktop.css").read_text(
-        encoding="utf-8"
-    )
+    desktop = (ROOT / "cloudhelm/static/assets/desktop.css").read_text(encoding="utf-8")
     app = (ROOT / "cloudhelm/static/assets/app.css").read_text(encoding="utf-8")
     assert "@media (min-width: 960px)" in desktop
     assert "@media (min-width: 960px)" in app
@@ -70,6 +68,10 @@ def test_management_and_scaling_settings_are_split_into_tabs():
     assert "data-delete-instance" in script
     assert "确认删除实例" in script
     assert "businessHistoryCard" in script
+    assert "AI 业务服务" in script
+    assert "AI 服务发布" in script
+    assert "data-service-id" in script
+    assert "service_id:row.dataset.serviceId" in script
     container_history = script[
         script.index("async function renderContainerHistory") : script.index(
             "function gpuAllocation"
@@ -116,9 +118,7 @@ def test_agent_compose_mounts_host_read_only_for_system_metrics():
 
 
 def test_automatic_tag_workflow_explicitly_dispatches_release():
-    workflow = (ROOT / ".github/workflows/tag-release.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github/workflows/tag-release.yml").read_text(encoding="utf-8")
     assert "actions: write" in workflow
     assert "gh workflow run release.yml" in workflow
     assert '--field "release_tag=$tag"' in workflow

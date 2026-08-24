@@ -135,6 +135,70 @@ def can_receive_alert(
     )
 
 
+def can_view_service_alert(
+    user: User, rules: list[AccessRule], service_id: str
+) -> bool:
+    if user.role == UserRole.admin or not user.resource_restricted:
+        return True
+    return any(
+        rule.scope_type == "service" and rule.service_id == service_id and rule.can_view
+        for rule in rules
+    )
+
+
+def can_receive_service_alert(
+    user: User, rules: list[AccessRule], service_id: str
+) -> bool:
+    if not user.is_active:
+        return False
+    if user.role == UserRole.admin or not user.resource_restricted:
+        return user.alert_notifications
+    return any(
+        rule.scope_type == "service"
+        and rule.service_id == service_id
+        and rule.can_view
+        and rule.alert_notify
+        for rule in rules
+    )
+
+
+def can_access_service(
+    user: User,
+    rules: list[AccessRule],
+    service_id: str,
+    permission: Literal["view", "operate", "manage"] = "view",
+) -> bool:
+    if user.role == UserRole.admin:
+        return True
+    if permission in {"operate", "manage"} and user.role != UserRole.operator:
+        return False
+    if not user.resource_restricted:
+        return permission != "manage"
+    return any(
+        rule.scope_type == "service"
+        and rule.service_id == service_id
+        and _permission_granted(rule, permission)
+        for rule in rules
+    )
+
+
+def can_view_scaling(db: Session, user: User) -> bool:
+    if user.role == UserRole.admin or not user.resource_restricted:
+        return True
+    return (
+        db.scalar(
+            select(AccessRule.id)
+            .where(
+                AccessRule.user_id == user.id,
+                AccessRule.scope_type == "service",
+                AccessRule.can_view.is_(True),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def visible_inventory(
     db: Session, user: User
 ) -> tuple[list[Node], list[Container], list[AccessRule]]:

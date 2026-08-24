@@ -50,8 +50,8 @@ def test_agent_inventory_and_task_flow(
                         "tx_bps": 1024.25,
                     }
                 ],
-                    "cpu_percent": 36.5,
-                    "cpu_count": 32,
+                "cpu_percent": 36.5,
+                "cpu_count": 32,
                 "memory_total_bytes": 34359738368,
                 "memory_used_bytes": 12884901888,
                 "memory_available_bytes": 21474836480,
@@ -109,9 +109,9 @@ def test_agent_inventory_and_task_flow(
                     "network_tx_bytes": 25000,
                     "network_rx_bps": 512.5,
                     "network_tx_bps": 256.25,
-                        "writable_layer_bytes": 1048576,
-                        "rootfs_bytes": 52428800,
-                        "writable_layer_growth_mibps": 1.5,
+                    "writable_layer_bytes": 1048576,
+                    "rootfs_bytes": 52428800,
+                    "writable_layer_growth_mibps": 1.5,
                     "block_read_bytes": 2097152,
                     "block_write_bytes": 3145728,
                     "block_read_bps": 1024.5,
@@ -369,6 +369,8 @@ def test_health_and_frontend(client: TestClient):
     assert "renderNodeSystem(node)" in script.text
     assert "writable_layer_bytes" in script.text
     assert "can_manage:level==='manage'" in script.text
+    assert "applyScalingPermissions(root)" in script.text
+    assert "data-user-role" in script.text
     assert "state.user.can_manage_access" in script.text
     assert "/access/preview" in script.text
     assert "expected_version" in script.text
