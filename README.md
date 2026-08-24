@@ -2,14 +2,17 @@
 
 云舵是面向企业微信 H5 和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.8.1`。审计页面以中文显示操作、对象、结果和常见详情；管理员可对任意已启用且开启通知的告警规则发送模拟告警，模拟消息复用真实的资源范围、人员订阅、权限校验和企业微信应用消息链路，但不会创建真实故障事件或改变告警状态。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级；Server 会在任何结构变更前完成完整性检查和一致性备份，再执行有版本记录的幂等迁移，不会清空用户、权限、节点、容器、历史指标或审计数据。
+当前版本为 `0.9.1`。在本地常驻 + ACS 突发弹性的基础上，新增模块期望镜像和分阶段发布：ACS 先滚动到新版本，本地 GPU 容器再严格逐个替换，每个实例恢复业务健康上报后才继续下一个；Compose 重新启动旧 Tag 时会按期望版本自动纠正。本地实例可通过 `cloudhelm.service_id`、`cloudhelm.instance_id` 容器标签与 Agent 状态自动关联，ACS 实例保持无主机 Agent 的独立实例池。支持从 `0.5.2` 及之后版本使用 SQLite 原地升级，不会清空既有数据。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
+- [0.9.1 全新部署与 0.8.1 升级](docs/deploy-and-upgrade-0.9.1.md)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [监控告警与企业微信通知](#监控告警与企业微信通知)
+- [本地常驻与阿里云 ACS 弹性](docs/hybrid-autoscaling.md)
+- [模块镜像版本与分阶段发布](docs/module-image-releases.md)
 - [人员与容器权限](#人员与容器权限)
 - [企业自用小程序](#企业自用小程序)
 - [实际使用中的安全注意事项](#实际使用中的安全注意事项)
@@ -94,15 +97,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.8.1.tar.gz.sha256
-tar -xzf cloudhelm-0.8.1.tar.gz
-cd cloudhelm-0.8.1
+sha256sum -c cloudhelm-0.9.1.tar.gz.sha256
+tar -xzf cloudhelm-0.9.1.tar.gz
+cd cloudhelm-0.9.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.8.1.tar.gz: OK
+cloudhelm-0.9.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -181,6 +184,11 @@ CLOUDHELM_ALERTS_ENABLED=true
 CLOUDHELM_ALERT_EVENT_RETENTION_HOURS=2160
 CLOUDHELM_ALERT_EVENT_MAX_ROWS=10000
 CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=false
+CLOUDHELM_AUTOSCALING_ENABLED=false
+CLOUDHELM_AUTOSCALING_INTERVAL_SECONDS=15
+CLOUDHELM_AUTOSCALING_HISTORY_RETENTION_HOURS=24
+CLOUDHELM_ACS_KUBERNETES_TIMEOUT_SECONDS=10
+CLOUDHELM_IMAGE_RELEASE_TIMEOUT_SECONDS=3600
 CLOUDHELM_TRUST_PROXY_HEADERS=true
 CLOUDHELM_BIND_ADDRESS=127.0.0.1
 CLOUDHELM_PORT=8080
@@ -217,6 +225,11 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_ALERT_EVENT_RETENTION_HOURS`|告警事件保留时间|默认 2160 小时（90 天），可设 24–17520（两年）|
 |`CLOUDHELM_ALERT_EVENT_MAX_ROWS`|告警事件总行数硬上限|默认 10000，可设 100–1000000；每小时清理过期及超限事件|
 |`CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED`|企微告警消息全局开关|默认 `false`；启用后仍只向 H5“用户 → 权限与告警”中明确订阅且当前有权查看资源的成员发送|
+|`CLOUDHELM_AUTOSCALING_ENABLED`|ACS 连接、自动伸缩和分阶段发布的全局开关|默认 `false`；完成 ACS 私网连通、TLS、最小 RBAC、业务上报和排空验证后再开启|
+|`CLOUDHELM_AUTOSCALING_INTERVAL_SECONDS`|业务负载与镜像发布状态检查间隔|默认 15 秒，可设 5–300|
+|`CLOUDHELM_AUTOSCALING_HISTORY_RETENTION_HOURS`|业务负载采样保留时间|默认 24 小时，可设 1–8760|
+|`CLOUDHELM_ACS_KUBERNETES_TIMEOUT_SECONDS`|单次 ACS Kubernetes API 请求超时|默认 10 秒，可设 2–60|
+|`CLOUDHELM_IMAGE_RELEASE_TIMEOUT_SECONDS`|ACS 加本地逐节点发布的整批超时|默认 3600 秒，可设 300–86400|
 |`CLOUDHELM_TRUST_PROXY_HEADERS`|读取代理转发的真实 IP|仅在后端只允许可信代理访问时设为 `true`|
 |`CLOUDHELM_BIND_ADDRESS`|宿主机监听地址|保持 `127.0.0.1`|
 |`CLOUDHELM_PORT`|宿主机后端端口|默认 8080，不对公网开放|
@@ -339,7 +352,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.8.1/deploy
+cd cloudhelm-0.9.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -780,20 +793,20 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.5.2–0.8.0 原地升级到 0.8.1
+## 从 0.8.1 原地升级到 0.9.1
 
-从 0.8.0 升级到 0.8.1 没有数据库结构变更，不会修改既有规则、事件、订阅或审计原始记录。从 0.7.1 及更早版本直接升级时，仍会给节点增加 GPU 数量基线和网络动态基线字段，给容器增加可写层增长速率字段，创建 `alert_rule_seeds` 默认规则播种记录表，并写入 `0007_extended_alert_metrics` 迁移记录；更早版本还会依次补充监控列、资源管理权限、权限版本号、`metric_samples` 有界历史表、告警表和按资源告警订阅字段。迁移不会重建已有表，也不会修改已有用户、企微身份、既有告警订阅、Agent 节点凭据、历史指标或审计记录。
+0.9.1 在 0.8.1 基础上创建混合云业务负载、实例、历史采样和伸缩事件表，并增加模块期望镜像、ACS 目标容器和分阶段发布状态字段，写入 `0008_hybrid_cloud_autoscaling`、`0009_module_image_releases` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
 
-SQLite 始终在启动时运行 `PRAGMA integrity_check`。只有检测到待执行结构迁移时，才会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.8.1.bak` 一致性备份并在完成后再次检查；从 0.8.0 升级因无结构迁移不会自动生成新备份，仍建议执行下面的停机备份。现有 `.env` 不需要增加变量；既有人员告警订阅会原样保留。
+SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.9.1.bak` 一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [0.9.1 全新部署与 0.8.1 升级手册](docs/deploy-and-upgrade-0.9.1.md)。
 
-先在 `0.5.2` 部署目录停止 Server 并制作一致性备份：
+先在 `0.8.1` 部署目录停止 Server 并制作一致性备份：
 
 ```bash
-cd /实际路径/cloudhelm-0.5.2
+cd /实际路径/cloudhelm-0.8.1
 docker compose stop server
-sudo tar -czf ../cloudhelm-0.5.2-before-monitoring.tar.gz -C cloudhelm-data .
-chmod 600 ../cloudhelm-0.5.2-before-monitoring.tar.gz
-test -s ../cloudhelm-0.5.2-before-monitoring.tar.gz
+sudo tar -czf ../cloudhelm-0.8.1-before-0.9.1.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-0.8.1-before-0.9.1.tar.gz
+test -s ../cloudhelm-0.8.1-before-0.9.1.tar.gz
 ```
 
 解压新版发布包后，把其中的 `docker-compose.yml` 复制到现有部署目录。保留现有 `.env` 和 `cloudhelm-data`，不要用示例文件覆盖它们：
@@ -808,9 +821,9 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-0.8.1 的中文审计和模拟告警只涉及 Server/H5，小程序审计页面也会直接使用 Server 返回的中文字段；0.8.0 Agent 与 0.8.1 Server 完全兼容，不强制升级 Agent。若 Agent 仍早于 0.8.0，“按 CPU 核数归一化的宿主机负载”和“按真实磁盘查询间隔计算的容器可写层增长”仍需要升级到 0.8.1 Agent。升级 Agent 不需要修改 `agent.env`、重新注册、删除状态目录或改动 GPU overlay。
+业务负载由各 AI 服务直接上报。使用容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 0.9.1，以便上报关联标签、等待 Docker 健康检查并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
 
-如果从 0.5.2、0.6.0 等尚未采用宿主机网络视图的版本升级，每台 Agent 节点必须复制新版 `deploy/agent.compose.yml`；GPU 节点同时复制新版 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
+每台 Agent 节点复制新版 `deploy/agent.compose.yml`；GPU 节点继续叠加原有 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
 如果现有 `agent.env` 包含旧网络路径，必须改为以下值；需要固定网卡时再填写第二行，否则保持空值使用自动选择：
 
@@ -820,7 +833,7 @@ CLOUDHELM_AGENT_NETWORK_INTERFACES=
 ```
 
 ```bash
-cd /实际路径/cloudhelm-0.5.2/deploy
+cd /实际路径/cloudhelm-0.8.1/deploy
 cp /新版发布包目录/deploy/agent.compose.yml ./agent.compose.yml
 cp /新版发布包目录/deploy/agent.gpu.compose.yml ./agent.gpu.compose.yml
 docker compose -f agent.compose.yml -f agent.gpu.compose.yml pull agent
@@ -830,7 +843,7 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 age
 
 非 GPU 节点删除上面命令中的 `-f agent.gpu.compose.yml`。第一次心跳显示 `0 B/s` 属正常现象；约一个上报周期后才有网络速率，容器磁盘大小最长等待默认 300 秒。
 
-如新版 Server 无法启动，先保留错误日志，再把 Compose 中 Server 镜像恢复为 `0.5.2` 并启动。新增列是向后兼容字段，`0.5.2` 会忽略它们；需要完全恢复升级前状态时，停止 Server、清空当前 `cloudhelm-data` 后再从备份包恢复。清空或覆盖数据库属于破坏性操作，必须先验证备份文件且只针对明确的部署目录。
+如新版 Server 无法启动，先保留错误日志，再把 Compose 中 Server 镜像恢复为 `0.8.1` 并启动。新增表和列是向后兼容数据，0.8.1 不会读取它们；需要完全恢复升级前状态时，停止 Server、移走当前 `cloudhelm-data` 后再从已验证的备份包恢复。移动或覆盖数据库属于破坏性操作，必须只针对明确的部署目录。
 
 ## PostgreSQL 部署
 
@@ -926,7 +939,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.8.1
+bash scripts/package-release.sh 0.9.1
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -934,11 +947,11 @@ bash scripts/package-release.sh 0.8.1
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.8.1
-git push origin v0.8.1
+git tag v0.9.1
+git push origin v0.9.1
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.8.1`
-- `ghcr.io/xbl916/cloud-helm-agent:0.8.1`
+- `ghcr.io/xbl916/cloud-helm-server:0.9.1`
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.1`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。两者都额外发布 `v0.8.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v0.9.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

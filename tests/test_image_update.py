@@ -142,6 +142,47 @@ def test_agent_rolls_back_old_container_if_replacement_creation_fails(monkeypatc
     old.start.assert_called_once_with()
 
 
+def test_agent_rolls_back_when_replacement_health_check_fails(monkeypatch):
+    monkeypatch.setattr("cloudhelm_agent.docker_runtime.time.sleep", lambda _: None)
+    runtime = DockerRuntime.__new__(DockerRuntime)
+    runtime.client = MagicMock()
+    old = MagicMock()
+    old.id = "healthold123456789"
+    old.name = "vlm"
+    old.attrs = {
+        "Name": "/vlm",
+        "Config": {"Image": "example/vlm:1.0", "Labels": {}},
+        "HostConfig": {"AutoRemove": False},
+        "NetworkSettings": {"Networks": {}},
+        "State": {"Running": True},
+    }
+    replacement = MagicMock()
+    replacement.id = "healthnew123456789"
+    replacement.attrs = {
+        "State": {"Running": True, "Health": {"Status": "unhealthy"}}
+    }
+    runtime.client.containers.get.side_effect = [old, replacement]
+    runtime.client.images.pull.return_value = MagicMock(id="sha256:new")
+    runtime.client.api.create_container_from_config.return_value = {
+        "Id": replacement.id
+    }
+
+    with pytest.raises(RuntimeError, match="health check failed"):
+        runtime.execute(
+            old.id,
+            "update_image",
+            {
+                "expected_image": "example/vlm:1.0",
+                "target_image": "example/vlm:2.0",
+                "startup_health_seconds": 300,
+            },
+        )
+
+    replacement.remove.assert_called_once_with(force=True, v=False)
+    assert old.rename.call_count == 2
+    old.start.assert_called_once_with()
+
+
 def test_global_or_container_admin_can_queue_same_repository_image_update(
     client: TestClient, admin_headers: dict[str, str], session_for
 ):

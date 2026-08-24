@@ -20,6 +20,13 @@ AUDIT_ACTION_LABELS = {
     "alert.rule.delete": "删除告警规则",
     "alert.acknowledge": "确认告警",
     "alert.notification.test": "发送模拟告警",
+    "scaling.service.create": "创建混合云伸缩服务",
+    "scaling.service.update": "修改混合云伸缩策略",
+    "scaling.service.token.rotate": "轮换业务上报令牌",
+    "scaling.instance.capacity.update": "修改服务实例容量",
+    "scaling.instance.monitoring.update": "修改服务实例监控状态",
+    "scaling.service.image.release": "分阶段发布模块镜像",
+    "scaling.service.image.rollback": "回滚模块镜像",
     "user.create": "创建用户",
     "user.update": "修改用户",
     "user.sessions.revoke": "撤销用户登录会话",
@@ -33,6 +40,7 @@ AUDIT_TARGET_LABELS = {
     "alert_rule": "告警规则",
     "user": "用户",
     "session": "登录会话",
+    "scaling_service": "伸缩服务",
 }
 
 CONTAINER_ACTION_LABELS = {

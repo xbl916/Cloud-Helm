@@ -7,9 +7,10 @@
     <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/app.css?v=0.8.1" />
-    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.8.1" />
-    <link rel="stylesheet" href="/assets/gpu.css?v=0.8.1" />
+    <link rel="stylesheet" href="/assets/app.css?v=0.9.1" />
+    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.9.1" />
+    <link rel="stylesheet" href="/assets/gpu.css?v=0.9.1" />
+    <link rel="stylesheet" href="/assets/scaling.css?v=0.9.1" />
     <title>云舵 Cloud Helm</title>
   </head>
   <body>
@@ -59,6 +60,7 @@
             <article><span class="metric-icon violet">GPU</span><div><strong id="gpu-count">—</strong><span id="gpu-summary">NVIDIA GPU</span></div></article>
             <article><span class="metric-icon blue">NET</span><div><strong id="host-network-rate">—</strong><span>节点实时收发</span></div></article>
             <article><span class="metric-icon green">SSD</span><div><strong id="host-disk-usage">—</strong><span>节点磁盘占用</span></div></article>
+            <article><span class="metric-icon violet">AI</span><div><strong id="active-businesses">—</strong><span id="business-summary">当前承载业务</span></div></article>
           </div>
           <div class="section-heading"><div><p class="eyebrow">NODES</p><h2>节点状态</h2></div><button data-nav="nodes">查看全部</button></div>
           <div id="overview-nodes" class="node-list skeleton-list"><div class="skeleton"></div><div class="skeleton"></div></div>
@@ -86,7 +88,7 @@
           <div class="settings-card">
             <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
             <div><span>节点通信</span><strong>独立令牌</strong></div>
-            <div><span>版本</span><strong>Cloud Helm 0.8.1</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.9.1</strong></div>
           </div>
           <section id="admin-users" class="admin-users hidden">
             <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
@@ -96,6 +98,13 @@
             <div class="section-heading"><div><p class="eyebrow">ALERT RULES</p><h2>告警规则</h2></div><button id="refresh-alert-rules">刷新</button></div>
             <p class="access-hint">每条规则可按真实资源范围和人员订阅发送模拟告警；消息会明确标记为模拟，不生成真实故障事件。</p>
             <div id="alert-rule-list" class="alert-rule-list"></div>
+          </section>
+          <section id="admin-scaling" class="admin-users hidden">
+            <div class="section-heading"><div><p class="eyebrow">HYBRID CLOUD</p><h2>本地基座与 ACS 弹性</h2></div><button id="add-scaling-service">添加服务</button></div>
+            <p class="access-hint">本地实例保持常驻；达到平均负载阈值或本地实例故障时扩容 ACS，缩容只作用于已完成排空的 ACS 实例。</p>
+            <div id="scaling-service-list" class="scaling-service-list"></div>
+            <div class="section-heading scaling-events-heading"><div><p class="eyebrow">SCALING EVENTS</p><h2>弹性事件</h2></div><button id="refresh-scaling">刷新</button></div>
+            <div id="scaling-event-list" class="scaling-event-list"></div>
           </section>
           <button id="logout-button" class="danger-outline">退出登录</button>
         </section>
@@ -168,6 +177,28 @@
         <footer><button type="button" data-close-access>取消</button><button id="save-access-button" class="primary-small">保存权限与告警</button></footer>
       </section>
     </div>
-    <script src="/assets/app.js?v=0.8.1" defer></script>
+    <div id="scaling-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true">
+      <form id="scaling-form" class="user-form scaling-form">
+        <div class="form-heading"><div><p class="eyebrow">HYBRID AUTOSCALING</p><h2>添加 AI 服务</h2></div><button type="button" data-close-scaling>×</button></div>
+        <div id="scaling-form-fields">
+          <label>服务名称<input name="name" required maxlength="120" placeholder="例如 VLM 推理服务" /></label>
+          <label>业务类型<select name="service_type"><option value="vlm">VLM</option><option value="tts">TTS</option><option value="asr">ASR</option><option value="llm">LLM</option><option value="other">其他</option></select></label>
+          <label>每实例默认业务上限<input name="capacity_per_replica" type="number" min="1" value="10" required /></label>
+          <label>ACS Namespace<input name="namespace" value="default" required /></label>
+          <label>ACS 工作负载类型<select name="workload_kind"><option value="Deployment">Deployment</option><option value="StatefulSet">StatefulSet</option></select></label>
+          <label>ACS 工作负载名称<input name="workload_name" required placeholder="例如 vlm-burst" /></label>
+          <label>ACS 目标容器名<input name="acs_container_name" placeholder="多容器 Pod 时必填" /></label>
+          <label>ACS 最小 / 最大副本<div class="split-input"><input name="min_replicas" type="number" min="0" value="0" /><input name="max_replicas" type="number" min="1" value="10" /></div></label>
+          <label>故障兜底副本数<input name="failover_replicas" type="number" min="1" value="1" /></label>
+          <label>扩容 / 缩容阈值 (%)<div class="split-input"><input name="scale_up_threshold_percent" type="number" min="1" max="100" value="70" /><input name="scale_down_threshold_percent" type="number" min="0" max="99" value="40" /></div></label>
+          <label>统计窗口 / 冷却时间 (秒)<div class="split-input"><input name="window_seconds" type="number" min="60" value="300" /><input name="cooldown_seconds" type="number" min="30" value="300" /></div></label>
+          <label class="scaling-checkbox"><input name="autoscaling_enabled" type="checkbox" /> 创建后启用自动扩缩容</label>
+          <p id="scaling-form-error" class="form-error"></p>
+          <button class="primary-button" type="submit"><span>创建服务并生成上报令牌</span><span>→</span></button>
+        </div>
+        <div id="scaling-token-result" class="scaling-token-result hidden"><strong>业务上报令牌（仅显示一次）</strong><p>请立即保存到本地与 ACS 服务的 Secret 中。</p><code></code><button type="button" data-close-scaling class="primary-small">我已保存</button></div>
+      </form>
+    </div>
+    <script src="/assets/app.js?v=0.9.1" defer></script>
   </body>
 </html>

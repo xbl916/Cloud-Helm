@@ -128,6 +128,24 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
                 },
             },
         ),
+        ("0008_hybrid_cloud_autoscaling", {}),
+        (
+            "0009_module_image_releases",
+            {
+                "scaling_services": {
+                    "acs_container_name": "VARCHAR(253) NOT NULL DEFAULT ''",
+                    "desired_image": "VARCHAR(512)",
+                    "previous_image": "VARCHAR(512)",
+                    "release_status": "VARCHAR(30) NOT NULL DEFAULT 'idle'",
+                    "release_error": "VARCHAR(500)",
+                    "release_requested_by": "VARCHAR(36)",
+                    "release_task_id": "VARCHAR(36)",
+                    "release_acs_original_replicas": "INTEGER",
+                    "release_started_at": timestamp_type,
+                    "release_updated_at": timestamp_type,
+                }
+            },
+        ),
     ]
 
 

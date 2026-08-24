@@ -403,3 +403,139 @@ class AccessRule(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
+
+
+class ScalingService(Base):
+    """A logical AI workload whose replicas report their current business load."""
+
+    __tablename__ = "scaling_services"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    service_type: Mapped[str] = mapped_column(String(20), default="other", index=True)
+    report_token_hash: Mapped[str] = mapped_column(String(512))
+    capacity_per_replica: Mapped[int] = mapped_column(Integer, default=1)
+    autoscaling_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    min_replicas: Mapped[int] = mapped_column(Integer, default=1)
+    max_replicas: Mapped[int] = mapped_column(Integer, default=1)
+    scale_up_threshold_percent: Mapped[float] = mapped_column(Float, default=70.0)
+    scale_down_threshold_percent: Mapped[float] = mapped_column(Float, default=40.0)
+    window_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    report_stale_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    scale_up_step: Mapped[int] = mapped_column(Integer, default=1)
+    failover_replicas: Mapped[int] = mapped_column(Integer, default=1)
+    provider: Mapped[str] = mapped_column(String(30), default="acs_kubernetes")
+    namespace: Mapped[str] = mapped_column(String(253), default="default")
+    workload_kind: Mapped[str] = mapped_column(String(20), default="Deployment")
+    workload_name: Mapped[str] = mapped_column(String(253), default="")
+    acs_container_name: Mapped[str] = mapped_column(String(253), default="")
+    desired_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    previous_image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    release_status: Mapped[str] = mapped_column(String(30), default="idle", index=True)
+    release_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    release_requested_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    release_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    release_acs_original_replicas: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    release_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    release_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    current_replicas: Mapped[int] = mapped_column(Integer, default=0)
+    desired_replicas: Mapped[int] = mapped_column(Integer, default=0)
+    current_businesses: Mapped[int] = mapped_column(Integer, default=0)
+    average_businesses: Mapped[float] = mapped_column(Float, default=0.0)
+    utilization_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    reporting_instances: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="collecting")
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_report_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_scaled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ServiceInstance(Base):
+    __tablename__ = "service_instances"
+    __table_args__ = (
+        UniqueConstraint("service_id", "instance_id", name="uq_service_instance"),
+        Index("ix_service_instances_updated", "service_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    service_id: Mapped[str] = mapped_column(
+        ForeignKey("scaling_services.id", ondelete="CASCADE"), index=True
+    )
+    instance_id: Mapped[str] = mapped_column(String(253))
+    container_id: Mapped[str | None] = mapped_column(
+        ForeignKey("containers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    active_businesses: Mapped[int] = mapped_column(Integer, default=0)
+    capacity_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pool: Mapped[str] = mapped_column(String(12), default="local", index=True)
+    healthy: Mapped[bool] = mapped_column(Boolean, default=True)
+    ready: Mapped[bool] = mapped_column(Boolean, default=True)
+    monitored: Mapped[bool] = mapped_column(Boolean, default=True)
+    accepting: Mapped[bool] = mapped_column(Boolean, default=True)
+    desired_state: Mapped[str] = mapped_column(String(16), default="serve")
+    drain_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+
+class BusinessMetricSample(Base):
+    __tablename__ = "business_metric_samples"
+    __table_args__ = (
+        Index("ix_business_samples_service_time", "service_id", "sampled_at"),
+        Index("ix_business_samples_time", "sampled_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    service_id: Mapped[str] = mapped_column(
+        ForeignKey("scaling_services.id", ondelete="CASCADE"), index=True
+    )
+    sampled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    active_businesses: Mapped[int] = mapped_column(Integer, default=0)
+    total_capacity: Mapped[int] = mapped_column(Integer, default=0)
+    reporting_instances: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ScalingEvent(Base):
+    __tablename__ = "scaling_events"
+    __table_args__ = (Index("ix_scaling_events_service_time", "service_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    service_id: Mapped[str] = mapped_column(
+        ForeignKey("scaling_services.id", ondelete="CASCADE"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(30), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    from_replicas: Mapped[int] = mapped_column(Integer, default=0)
+    to_replicas: Mapped[int] = mapped_column(Integer, default=0)
+    average_businesses: Mapped[float] = mapped_column(Float, default=0.0)
+    utilization_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    detail: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )

@@ -358,7 +358,11 @@ class DockerRuntime:
         return config
 
     def _update_image(
-        self, container: Any, expected_image: str, target_image: str
+        self,
+        container: Any,
+        expected_image: str,
+        target_image: str,
+        startup_health_seconds: int = 180,
     ) -> dict[str, str]:
         container.reload()
         attrs = container.attrs
@@ -402,10 +406,26 @@ class DockerRuntime:
             if was_running:
                 replacement.start()
                 time.sleep(0.5)
-                replacement.reload()
-                state = replacement.attrs.get("State") or {}
-                if not state.get("Running") and not state.get("Restarting"):
-                    raise RuntimeError("replacement container exited during startup")
+                deadline = time.monotonic() + min(
+                    max(startup_health_seconds, 1), 600
+                )
+                while True:
+                    replacement.reload()
+                    state = replacement.attrs.get("State") or {}
+                    if not state.get("Running") and not state.get("Restarting"):
+                        raise RuntimeError("replacement container exited during startup")
+                    health = (state.get("Health") or {}).get("Status")
+                    if health == "unhealthy":
+                        raise RuntimeError(
+                            "replacement container health check failed during startup"
+                        )
+                    if health != "starting":
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            "replacement container health check did not become ready in time"
+                        )
+                    time.sleep(1)
         except Exception:
             if replacement is not None:
                 try:
@@ -456,5 +476,6 @@ class DockerRuntime:
                 container,
                 str(arguments.get("expected_image") or ""),
                 str(arguments.get("target_image") or ""),
+                int(arguments.get("startup_health_seconds") or 180),
             )
         raise RuntimeError(f"unsupported action: {action}")

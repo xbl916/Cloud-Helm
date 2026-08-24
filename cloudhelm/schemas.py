@@ -288,3 +288,63 @@ class TaskOut(BaseModel):
     finished_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class BusinessMetricReport(BaseModel):
+    instance_id: str = Field(min_length=1, max_length=253)
+    active_businesses: int = Field(ge=0, le=100000000)
+    pool: Literal["local", "acs"] = "local"
+    healthy: bool = True
+    ready: bool = True
+    accepting: bool = True
+    container_id: str | None = Field(default=None, max_length=36)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("instance_id")
+    @classmethod
+    def normalize_instance_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("实例 ID 不能为空")
+        return value
+
+
+class ScalingServiceInput(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    service_type: Literal["vlm", "tts", "asr", "llm", "other"] = "other"
+    capacity_per_replica: int = Field(default=1, ge=1, le=100000000)
+    autoscaling_enabled: bool = False
+    min_replicas: int = Field(default=0, ge=0, le=10000)
+    max_replicas: int = Field(default=1, ge=1, le=10000)
+    scale_up_threshold_percent: float = Field(default=70, gt=0, le=100)
+    scale_down_threshold_percent: float = Field(default=40, ge=0, lt=100)
+    window_seconds: int = Field(default=300, ge=60, le=3600)
+    cooldown_seconds: int = Field(default=300, ge=30, le=86400)
+    report_stale_seconds: int = Field(default=60, ge=15, le=3600)
+    scale_up_step: int = Field(default=1, ge=1, le=1000)
+    failover_replicas: int = Field(default=1, ge=1, le=10000)
+    provider: Literal["acs_kubernetes"] = "acs_kubernetes"
+    namespace: str = Field(default="default", min_length=1, max_length=253)
+    workload_kind: Literal["Deployment", "StatefulSet"] = "Deployment"
+    workload_name: str = Field(min_length=1, max_length=253)
+    acs_container_name: str = Field(default="", max_length=253)
+
+    @model_validator(mode="after")
+    def validate_scaling_thresholds(self) -> "ScalingServiceInput":
+        if self.min_replicas > self.max_replicas:
+            raise ValueError("最小副本数不能大于最大副本数")
+        if self.scale_down_threshold_percent >= self.scale_up_threshold_percent:
+            raise ValueError("缩容阈值必须小于扩容阈值")
+        return self
+
+
+class ServiceInstanceCapacityInput(BaseModel):
+    capacity_limit: int | None = Field(default=None, ge=1, le=100000000)
+
+
+class ServiceInstanceMonitoringInput(BaseModel):
+    monitored: bool
+
+
+class ModuleReleaseInput(BaseModel):
+    target_image: str = Field(min_length=1, max_length=512)

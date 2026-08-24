@@ -30,6 +30,8 @@ from cloudhelm.models import (
     Container,
     MetricSample,
     Node,
+    ScalingService,
+    ServiceInstance,
     Task,
     User,
     UserRole,
@@ -150,6 +152,14 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
         if can_view_node_metrics(user, rules, node)
         and node.system_metrics_status == "ok"
     ]
+    visible_container_ids = {item.id for item in containers}
+    business_instances = list(
+        db.scalars(
+            select(ServiceInstance).where(
+                ServiceInstance.container_id.in_(visible_container_ids)
+            )
+        ).all()
+    ) if visible_container_ids else []
     return {
         "nodes": {
             "total": len(nodes),
@@ -191,6 +201,10 @@ def dashboard(db: Db, settings: Config, user: CurrentUser) -> dict:
                 2,
             ),
             "node_count": len(system_metrics),
+        },
+        "business": {
+            "active": sum(item.active_businesses for item in business_instances),
+            "instances": len(business_instances),
         },
     }
 
@@ -267,7 +281,10 @@ def list_containers(node_id: str, db: Db, user: CurrentUser) -> list[dict]:
     visible = [item for item in items if can_access(user, rules, node, item, "view")]
     if not visible and not can_access(user, rules, node, permission="view"):
         raise HTTPException(status_code=404, detail="节点不存在")
-    return [_container_dict(item) for item in visible]
+    return [
+        {**_container_dict(item), "business_loads": _container_business_loads(db, item.id)}
+        for item in visible
+    ]
 
 
 @router.post("/nodes/{node_id}/gpu-baseline/reset")
@@ -318,6 +335,7 @@ def get_container(container_id: str, db: Db, user: CurrentUser) -> dict:
     if not node or not can_access(user, rules, node, item, "view"):
         raise HTTPException(status_code=404, detail="容器不存在")
     result = _container_dict(item)
+    result["business_loads"] = _container_business_loads(db, item.id)
     result["node_name"] = node.name if node else "未知节点"
     result["assigned_gpus"] = _assigned_gpus(node, [item])
     result["permissions"] = {
@@ -372,6 +390,33 @@ def _container_dict(item: Container) -> dict:
         "gpu_all": item.gpu_all,
         "updated_at": _iso(item.updated_at),
     }
+
+
+def _container_business_loads(db: Db, container_id: str) -> list[dict]:
+    rows = db.execute(
+        select(ServiceInstance, ScalingService)
+        .join(ScalingService, ScalingService.id == ServiceInstance.service_id)
+        .where(ServiceInstance.container_id == container_id)
+        .order_by(ScalingService.name)
+    ).all()
+    return [
+        {
+            "service_id": service.id,
+            "service_name": service.name,
+            "service_type": service.service_type,
+            "instance_id": instance.instance_id,
+            "pool": instance.pool,
+            "active_businesses": instance.active_businesses,
+            "capacity_limit": instance.capacity_limit
+            or service.capacity_per_replica,
+            "healthy": instance.healthy,
+            "ready": instance.ready,
+            "accepting": instance.accepting,
+            "desired_state": instance.desired_state,
+            "updated_at": _iso(instance.updated_at),
+        }
+        for instance, service in rows
+    ]
 
 
 def _history(

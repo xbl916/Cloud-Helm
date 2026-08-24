@@ -146,13 +146,40 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     with old_engine.connect() as connection:
         assert connection.execute(
             text("SELECT COUNT(*) FROM schema_migrations")
-        ).scalar_one() == 7
+        ).scalar_one() == 9
         assert connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
         assert (
             connection.execute(text("SELECT name FROM containers")).scalar_one()
             == "原容器"
         )
     assert list(tmp_path.glob("cloudhelm-0.5.2.db.pre-*.bak"))
+
+
+def test_initialize_database_adds_module_release_columns(tmp_path):
+    database = tmp_path / "cloudhelm-0.9.0.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE scaling_services (id VARCHAR(36) PRIMARY KEY)")
+        )
+
+    initialize_database(legacy_engine)
+
+    columns = {
+        item["name"] for item in inspect(legacy_engine).get_columns("scaling_services")
+    }
+    assert {
+        "acs_container_name",
+        "desired_image",
+        "previous_image",
+        "release_status",
+        "release_error",
+        "release_requested_by",
+        "release_task_id",
+        "release_acs_original_replicas",
+        "release_started_at",
+        "release_updated_at",
+    }.issubset(columns)
 
 
 def test_sqlite_backup_is_created_before_schema_changes(tmp_path):

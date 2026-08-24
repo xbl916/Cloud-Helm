@@ -13,9 +13,17 @@ from cloudhelm.alerts import (
 from cloudhelm.audit import add_audit
 from cloudhelm.dependencies import AgentNode, Config, Db
 from cloudhelm.metrics import record_metric_history
-from cloudhelm.models import Container, Node, Task, TaskStatus
+from cloudhelm.models import (
+    Container,
+    Node,
+    ScalingService,
+    ServiceInstance,
+    Task,
+    TaskStatus,
+)
 from cloudhelm.schemas import (
     AgentTask,
+    ContainerSnapshot,
     EnrollRequest,
     EnrollResponse,
     HeartbeatRequest,
@@ -24,6 +32,63 @@ from cloudhelm.schemas import (
 from cloudhelm.security import hash_secret
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+SERVICE_ID_LABEL = "cloudhelm.service_id"
+INSTANCE_ID_LABEL = "cloudhelm.instance_id"
+
+
+def _bind_labeled_service_instances(
+    db: Db,
+    snapshots: list[ContainerSnapshot],
+    containers: list[Container],
+) -> None:
+    """Bind only Agent-observed Docker containers to local service instances."""
+    candidates: dict[tuple[str, str], list[Container]] = {}
+    for snapshot, container in zip(snapshots, containers, strict=True):
+        service_id = snapshot.labels.get(SERVICE_ID_LABEL, "").strip()
+        instance_id = snapshot.labels.get(INSTANCE_ID_LABEL, "").strip()
+        if not service_id or not instance_id or len(instance_id) > 253:
+            continue
+        candidates.setdefault((service_id, instance_id), []).append(container)
+
+    for (service_id, instance_id), matches in candidates.items():
+        # A stable instance ID must identify exactly one container per heartbeat.
+        if len(matches) != 1:
+            continue
+        container = matches[0]
+        service = db.get(ScalingService, service_id)
+        if not service:
+            continue
+        instance = db.scalar(
+            select(ServiceInstance).where(
+                ServiceInstance.service_id == service.id,
+                ServiceInstance.instance_id == instance_id,
+            )
+        )
+        if instance and instance.pool != "local":
+            # ACS instances have no host Agent and must never acquire a Docker link.
+            continue
+        for stale in db.scalars(
+            select(ServiceInstance).where(
+                ServiceInstance.container_id == container.id,
+                ServiceInstance.pool == "local",
+                ServiceInstance.id != (instance.id if instance else ""),
+            )
+        ).all():
+            stale.container_id = None
+        if not instance:
+            instance = ServiceInstance(
+                service_id=service.id,
+                instance_id=instance_id,
+                pool="local",
+                container_id=container.id,
+                healthy=False,
+                ready=False,
+                accepting=False,
+            )
+            db.add(instance)
+        else:
+            instance.container_id = container.id
 
 
 @router.post("/enroll", response_model=EnrollResponse)
@@ -157,6 +222,7 @@ def heartbeat(
         item.updated_at = now
         reported_containers.append(item)
     db.flush()
+    _bind_labeled_service_instances(db, payload.containers, reported_containers)
     record_metric_history(db, node, reported_containers, payload, now, settings)
     alert_event_ids = evaluate_heartbeat_alerts(
         db, node, reported_containers, payload, now, settings

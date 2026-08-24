@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     alert_event_retention_hours: int = Field(default=2160, ge=24, le=17520)
     alert_event_max_rows: int = Field(default=10000, ge=100, le=1000000)
     alert_notifications_enabled: bool = False
+    autoscaling_enabled: bool = False
+    autoscaling_interval_seconds: int = Field(default=15, ge=5, le=300)
+    autoscaling_history_retention_hours: int = Field(default=24, ge=1, le=8760)
+    acs_kubernetes_api_url: str | None = None
+    acs_kubernetes_bearer_token: str | None = Field(
+        default=None, min_length=16, max_length=16384
+    )
+    acs_kubernetes_bearer_token_file: Path | None = None
+    acs_kubernetes_ca_file: Path | None = None
+    acs_kubernetes_timeout_seconds: float = Field(default=10, ge=2, le=60)
+    image_release_timeout_seconds: int = Field(default=3600, ge=300, le=86400)
 
     @field_validator(
         "agent_enrollment_token", "wecom_secret", "wecom_miniprogram_secret"

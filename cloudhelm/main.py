@@ -17,11 +17,13 @@ from cloudhelm.alerts import (
     seed_default_alert_rules,
     send_alert_notification,
 )
+from cloudhelm.autoscaling import evaluate_all_services
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
 from cloudhelm.dependencies import CSRF_COOKIE, SESSION_COOKIE
 from cloudhelm.models import User, UserRole, WebSession
-from cloudhelm.routers import agent, api, auth
+from cloudhelm.releases import progress_image_releases
+from cloudhelm.routers import agent, api, auth, scaling
 from cloudhelm.security import digest_token
 
 settings = get_settings()
@@ -64,6 +66,16 @@ async def alert_monitor() -> None:
             await send_alert_notification(event_id, settings)
 
 
+async def autoscaling_monitor() -> None:
+    while True:
+        await asyncio.sleep(settings.autoscaling_interval_seconds)
+        with SessionLocal() as db:
+            now = datetime.now(UTC)
+            evaluate_all_services(db, now, settings)
+            progress_image_releases(db, now, settings)
+            db.commit()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
@@ -71,12 +83,16 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         seed_default_alert_rules(db, settings)
     alert_task = asyncio.create_task(alert_monitor())
+    scaling_task = asyncio.create_task(autoscaling_monitor())
     try:
         yield
     finally:
         alert_task.cancel()
+        scaling_task.cancel()
         with suppress(asyncio.CancelledError):
             await alert_task
+        with suppress(asyncio.CancelledError):
+            await scaling_task
 
 
 app = FastAPI(
@@ -93,6 +109,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(api.router, prefix="/api/v1")
+app.include_router(scaling.router, prefix="/api/v1")
 
 
 @app.middleware("http")
@@ -101,6 +118,7 @@ async def security_headers(request: Request, call_next):
         request.method in {"POST", "PUT", "PATCH", "DELETE"}
         and request.url.path.startswith("/api/v1/")
         and not request.url.path.startswith("/api/v1/agent/")
+        and not request.url.path.startswith("/api/v1/service-metrics/")
         and request.url.path != "/api/v1/auth/wecom-mini/login"
         and not request.headers.get("authorization", "").lower().startswith("bearer ")
     ):
