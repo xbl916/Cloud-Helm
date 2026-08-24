@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.5" in compose
+    assert f"cloud-helm-{service}:0.9.6" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -70,6 +70,12 @@ def test_management_and_scaling_settings_are_split_into_tabs():
     assert "data-delete-instance" in script
     assert "确认删除实例" in script
     assert "businessHistoryCard" in script
+    container_history = script[
+        script.index("async function renderContainerHistory") : script.index(
+            "function gpuAllocation"
+        )
+    ]
+    assert "businessHistoryCard(samples)" in container_history
 
 
 def test_server_entrypoint_drops_identity_and_all_capabilities():

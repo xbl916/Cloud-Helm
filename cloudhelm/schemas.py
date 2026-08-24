@@ -115,6 +115,7 @@ class AlertRuleInput(BaseModel):
         "node_load_percent",
         "node_swap_percent",
         "node_metrics_unavailable",
+        "service_business_overload_percent",
     ]
     operator: Literal["gte", "lte"] = "gte"
     threshold: float = Field(ge=0, le=1000000)

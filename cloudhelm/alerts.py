@@ -17,6 +17,7 @@ from cloudhelm.models import (
     AlertStatus,
     Container,
     Node,
+    ScalingService,
     User,
 )
 from cloudhelm.schemas import HeartbeatRequest
@@ -42,6 +43,7 @@ METRIC_LABELS = {
     "node_load_percent": "宿主机 1 分钟负载率",
     "node_swap_percent": "宿主机 Swap 使用率",
     "node_metrics_unavailable": "宿主机指标采集失效",
+    "service_business_overload_percent": "AI 服务业务容量利用率",
 }
 
 METRIC_UNITS = {
@@ -59,6 +61,7 @@ METRIC_UNITS = {
     "container_disk_growth_mibps": " MiB/s",
     "node_load_percent": "%",
     "node_swap_percent": "%",
+    "service_business_overload_percent": "%",
 }
 
 NETWORK_SURGE_MIN_BPS = 10 * 1024 * 1024
@@ -85,6 +88,7 @@ def seed_default_alert_rules(db: Session, settings: Settings) -> None:
         ("node-load", "宿主机负载过高", "node_load_percent", 150.0, 4, "warning", True),
         ("node-swap", "宿主机 Swap 使用率过高", "node_swap_percent", 80.0, 3, "warning", True),
         ("node-metrics", "宿主机指标采集失效", "node_metrics_unavailable", 1.0, 2, "critical", True),
+        ("service-business-overload", "AI 服务业务容量超限", "service_business_overload_percent", 100.0, 1, "critical", True),
     ]
     for key, name, metric, threshold, consecutive, severity, enabled in defaults:
         if db.get(AlertRuleSeed, key):
@@ -223,6 +227,8 @@ def _container_value(metric: str, container: Container) -> float | None:
 
 
 def _is_breached(rule: AlertRule, value: float) -> bool:
+    if rule.metric == "service_business_overload_percent":
+        return value > rule.threshold
     return value >= rule.threshold if rule.operator == "gte" else value <= rule.threshold
 
 
@@ -241,7 +247,7 @@ def _event_message(
 def _evaluate(
     db: Session,
     rule: AlertRule,
-    node: Node,
+    node_id: str,
     target_type: str,
     target_id: str,
     target_name: str,
@@ -260,7 +266,7 @@ def _evaluate(
             rule_id=rule.id,
             target_type=target_type,
             target_id=target_id,
-            node_id=node.id,
+            node_id=node_id,
             active=False,
             consecutive_count=0,
             current_value=value,
@@ -287,7 +293,7 @@ def _evaluate(
         rule_id=rule.id,
         target_type=target_type,
         target_id=target_id,
-        node_id=node.id,
+        node_id=node_id,
         target_name=target_name,
         rule_name=rule.name,
         status=status,
@@ -336,7 +342,10 @@ def evaluate_heartbeat_alerts(
     rules = list(
         db.scalars(
             select(AlertRule).where(
-                AlertRule.enabled.is_(True), AlertRule.metric != "node_offline"
+                AlertRule.enabled.is_(True),
+                AlertRule.metric.notin_(
+                    ["node_offline", "service_business_overload_percent"]
+                ),
             )
         ).all()
     )
@@ -347,7 +356,7 @@ def evaluate_heartbeat_alerts(
             value = _node_value(rule.metric, payload, node)
             if value is not None and _scope_matches(rule, node):
                 event_id = _evaluate(
-                    db, rule, node, "node", node.id, node.name, value, now
+                    db, rule, node.id, "node", node.id, node.name, value, now
                 )
                 if event_id:
                     created = True
@@ -361,7 +370,7 @@ def evaluate_heartbeat_alerts(
             event_id = _evaluate(
                 db,
                 rule,
-                node,
+                node.id,
                 "container",
                 container.id,
                 container.name,
@@ -372,6 +381,48 @@ def evaluate_heartbeat_alerts(
                 created = True
                 if rule.notify:
                     notifications.append(event_id)
+    if created:
+        cleanup_alert_events(db, settings, now)
+    return notifications
+
+
+def evaluate_service_business_alerts(
+    db: Session,
+    service: ScalingService,
+    average_capacity: float,
+    window_ready: bool,
+    now: datetime,
+    settings: Settings,
+) -> list[str]:
+    """Evaluate overload only after the service load window is fully populated."""
+    if not settings.alerts_enabled or not window_ready:
+        return []
+    if average_capacity > 0:
+        utilization = service.average_businesses * 100 / average_capacity
+    else:
+        utilization = 1_000_000.0 if service.average_businesses > 0 else 0.0
+    notifications: list[str] = []
+    created = False
+    for rule in db.scalars(
+        select(AlertRule).where(
+            AlertRule.enabled.is_(True),
+            AlertRule.metric == "service_business_overload_percent",
+        )
+    ).all():
+        event_id = _evaluate(
+            db,
+            rule,
+            service.id,
+            "service",
+            service.id,
+            service.name,
+            utilization,
+            now,
+        )
+        if event_id:
+            created = True
+            if rule.notify:
+                notifications.append(event_id)
     if created:
         cleanup_alert_events(db, settings, now)
     return notifications
@@ -399,7 +450,7 @@ def evaluate_offline_alerts(
         for rule in rules:
             if _scope_matches(rule, node):
                 event_id = _evaluate(
-                    db, rule, node, "node", node.id, node.name, value, now
+                    db, rule, node.id, "node", node.id, node.name, value, now
                 )
                 if event_id:
                     created = True
@@ -448,6 +499,16 @@ def alert_recipient_userids_for_target(
 
 
 def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
+    if event.target_type == "service":
+        return list(
+            db.scalars(
+                select(User.wecom_userid).where(
+                    User.is_active.is_(True),
+                    User.resource_restricted.is_(False),
+                    User.alert_notifications.is_(True),
+                )
+            ).all()
+        )
     node = db.get(Node, event.node_id)
     if not node:
         return []
@@ -463,7 +524,14 @@ def alert_recipient_userids(db: Session, event: AlertEvent) -> list[str]:
 
 def alert_test_targets(
     db: Session, rule: AlertRule
-) -> list[tuple[Node, Container | None]]:
+) -> list[tuple[Node | ScalingService, Container | None]]:
+    if rule.metric == "service_business_overload_percent":
+        return [
+            (service, None)
+            for service in db.scalars(
+                select(ScalingService).order_by(ScalingService.name)
+            )
+        ]
     nodes = list(db.scalars(select(Node).order_by(Node.name)).all())
     if rule.metric.startswith("container_"):
         containers = list(
@@ -485,19 +553,28 @@ def alert_test_targets(
 
 def alert_test_delivery(
     db: Session, rule: AlertRule
-) -> tuple[Node, Container | None, list[str]] | None:
+) -> tuple[Node | ScalingService, Container | None, list[str]] | None:
     targets = alert_test_targets(db, rule)
     if not targets:
         return None
     users, rules_by_user = _alert_recipient_context(db)
-    deliveries = [
-        (
-            node,
-            container,
-            _alert_recipient_userids(users, rules_by_user, node, container),
-        )
-        for node, container in targets
-    ]
+    deliveries = []
+    for target, container in targets:
+        if isinstance(target, ScalingService):
+            recipients = list(
+                db.scalars(
+                    select(User.wecom_userid).where(
+                        User.is_active.is_(True),
+                        User.resource_restricted.is_(False),
+                        User.alert_notifications.is_(True),
+                    )
+                ).all()
+            )
+        else:
+            recipients = _alert_recipient_userids(
+                users, rules_by_user, target, container
+            )
+        deliveries.append((target, container, recipients))
     return max(deliveries, key=lambda item: len(item[2]))
 
 

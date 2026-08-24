@@ -90,6 +90,15 @@ def test_metric_history_retention_and_hard_row_cap(tmp_path):
         assert node_sample.active_businesses == 7
         assert node_sample.business_capacity == 16
         assert node_sample.business_instances == 1
+        container_sample = db.scalar(
+            select(MetricSample)
+            .where(MetricSample.target_type == "container")
+            .order_by(MetricSample.sampled_at.desc())
+        )
+        assert container_sample is not None
+        assert container_sample.active_businesses == 7
+        assert container_sample.business_capacity == 16
+        assert container_sample.business_instances == 1
 
         record_metric_history(
             db, node, [container], payload, start + timedelta(hours=2), settings

@@ -8,6 +8,7 @@ from cloudhelm.alerts import (
     _node_value,
     evaluate_heartbeat_alerts,
     evaluate_offline_alerts,
+    evaluate_service_business_alerts,
     seed_default_alert_rules,
     send_alert_notification,
     update_node_alert_baselines,
@@ -22,6 +23,7 @@ from cloudhelm.models import (
     AuditLog,
     Container,
     Node,
+    ScalingService,
     User,
     UserRole,
 )
@@ -174,7 +176,8 @@ def test_extended_default_rules_are_seeded_once(tmp_path):
     with Session(target_engine) as db:
         seed_default_alert_rules(db, settings)
         rules = {rule.metric: rule for rule in db.scalars(select(AlertRule)).all()}
-        assert len(rules) == 18
+        assert len(rules) == 19
+        assert rules["service_business_overload_percent"].threshold == 100
         assert rules["node_gpu_temperature_c"].enabled is True
         assert rules["node_gpu_utilization_percent"].enabled is False
         assert rules["node_network_surge_percent"].enabled is False
@@ -187,6 +190,60 @@ def test_extended_default_rules_are_seeded_once(tmp_path):
                 AlertRule.metric == "container_disk_growth_mibps"
             )
         ) is None
+
+
+def test_service_business_overload_waits_for_window_and_recovers(tmp_path):
+    target_engine = create_engine(f"sqlite:///{tmp_path / 'business-alerts.db'}")
+    initialize_database(target_engine)
+    settings = get_settings()
+    now = datetime.now(UTC)
+    with Session(target_engine) as db:
+        seed_default_alert_rules(db, settings)
+        service = ScalingService(
+            name="持续超限的 VLM",
+            service_type="vlm",
+            report_token_hash="hash",
+            capacity_per_replica=10,
+            workload_name="vlm-burst",
+            average_businesses=12,
+        )
+        db.add(service)
+        db.flush()
+
+        assert (
+            evaluate_service_business_alerts(
+                db, service, 10, False, now, settings
+            )
+            == []
+        )
+        triggered = evaluate_service_business_alerts(
+            db, service, 10, True, now + timedelta(minutes=5), settings
+        )
+        assert len(triggered) == 1
+        assert (
+            evaluate_service_business_alerts(
+                db, service, 10, True, now + timedelta(minutes=6), settings
+            )
+            == []
+        )
+
+        service.average_businesses = 9
+        recovered = evaluate_service_business_alerts(
+            db, service, 10, True, now + timedelta(minutes=7), settings
+        )
+        assert len(recovered) == 1
+        events = list(
+            db.scalars(
+                select(AlertEvent)
+                .where(AlertEvent.target_type == "service")
+                .order_by(AlertEvent.created_at)
+            ).all()
+        )
+        assert [event.status for event in events] == [
+            AlertStatus.triggered,
+            AlertStatus.recovered,
+        ]
+        assert all(event.target_id == service.id for event in events)
 
 
 def test_extended_alert_metrics_trigger_and_recover(tmp_path):

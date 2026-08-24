@@ -7,6 +7,7 @@ import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from cloudhelm.alerts import evaluate_service_business_alerts
 from cloudhelm.config import Settings
 from cloudhelm.image_reference import parse_tagged_image
 from cloudhelm.models import (
@@ -257,6 +258,7 @@ def evaluate_service(
     now: datetime,
     settings: Settings,
     provider: AcsKubernetesClient | None = None,
+    alert_notifications: list[str] | None = None,
 ) -> None:
     previous_status = service.status
     previous_error = service.last_error
@@ -322,6 +324,11 @@ def evaluate_service(
         last = _aware(samples[-1].sampled_at) or now
         coverage = max(0.0, (last - first).total_seconds())
     window_ready = coverage >= service.window_seconds * 0.8
+    service_alerts = evaluate_service_business_alerts(
+        db, service, average_capacity, window_ready, now, settings
+    )
+    if alert_notifications is not None:
+        alert_notifications.extend(service_alerts)
 
     local_instances = [item for item in instances if item.pool == "local"]
     unavailable_local = [item for item in local_instances if item not in available]
@@ -505,8 +512,9 @@ def evaluate_service(
 
 def evaluate_all_services(
     db: Session, now: datetime, settings: Settings
-) -> None:
+) -> list[str]:
     provider: AcsKubernetesClient | None = None
+    alert_notifications: list[str] = []
     try:
         if settings.autoscaling_enabled:
             try:
@@ -514,7 +522,14 @@ def evaluate_all_services(
             except RuntimeError:
                 provider = None
         for service in db.scalars(select(ScalingService)).all():
-            evaluate_service(db, service, now, settings, provider)
+            evaluate_service(
+                db,
+                service,
+                now,
+                settings,
+                provider,
+                alert_notifications,
+            )
         cutoff = now - timedelta(hours=settings.autoscaling_history_retention_hours)
         db.execute(
             delete(BusinessMetricSample).where(
@@ -524,3 +539,4 @@ def evaluate_all_services(
     finally:
         if provider:
             provider.close()
+    return alert_notifications

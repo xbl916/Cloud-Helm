@@ -682,6 +682,11 @@ def _alert_rule_out(rule: AlertRule) -> dict:
 
 
 def _validate_alert_scope(db: Db, payload: AlertRuleInput) -> None:
+    if (
+        payload.metric == "service_business_overload_percent"
+        and payload.scope_type != "all"
+    ):
+        raise HTTPException(status_code=422, detail="AI 服务容量告警只能使用全部范围")
     if payload.metric.startswith("node_") and payload.scope_type == "container":
         raise HTTPException(status_code=422, detail="节点指标不能使用容器范围")
     if payload.scope_type == "environment":

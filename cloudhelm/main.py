@@ -71,9 +71,11 @@ async def autoscaling_monitor() -> None:
         await asyncio.sleep(settings.autoscaling_interval_seconds)
         with SessionLocal() as db:
             now = datetime.now(UTC)
-            evaluate_all_services(db, now, settings)
+            event_ids = evaluate_all_services(db, now, settings)
             progress_image_releases(db, now, settings)
             db.commit()
+        for event_id in event_ids:
+            await send_alert_notification(event_id, settings)
 
 
 @asynccontextmanager

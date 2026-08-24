@@ -2,13 +2,13 @@
 
 云舵是面向企业微信 H5、PC 企业微信扫码和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `0.9.5`。AI 服务实例容量页支持二次确认后删除未关联容器的错误实例，正常本地实例和发布中的实例会被双重保护；节点最近 24 小时趋势新增业务负载与健康接单容量曲线。同一服务仍支持按不同 GPU 实例分别配置承载上限，模块镜像继续按“ACS 就绪后、本地严格逐个替换并验证”的顺序发布。
+当前版本为 `0.9.6`。节点与容器详情都提供最近 24 小时业务负载曲线；平台会在一个完整统计窗口内业务负载持续超过健康接单容量时产生服务级严重告警，用于识别 ACS 扩容失败、实例未就绪或达到最大副本数。实例容量、错误实例二次确认删除和严格串行镜像发布能力保持兼容。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
-- [0.9.5 全新部署与 0.8.1 升级](docs/deploy-and-upgrade-0.9.5.md)
+- [0.9.6 全新部署与 0.8.1 升级](docs/deploy-and-upgrade-0.9.6.md)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [监控告警与企业微信通知](#监控告警与企业微信通知)
 - [本地常驻与阿里云 ACS 弹性](docs/hybrid-autoscaling.md)
@@ -97,15 +97,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-0.9.5.tar.gz.sha256
-tar -xzf cloudhelm-0.9.5.tar.gz
-cd cloudhelm-0.9.5
+sha256sum -c cloudhelm-0.9.6.tar.gz.sha256
+tar -xzf cloudhelm-0.9.6.tar.gz
+cd cloudhelm-0.9.6
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-0.9.5.tar.gz: OK
+cloudhelm-0.9.6.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -227,7 +227,7 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS`|历史采样间隔|默认 300 秒，可设 60–3600；心跳仍按 Agent 上报间隔更新当前值|
 |`CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS`|历史保留时间|默认 168 小时（7 天），可设 1–8760；PostgreSQL 可按容量提高到半年或一年|
 |`CLOUDHELM_METRICS_HISTORY_MAX_ROWS`|所有节点和容器合计的历史行数硬上限|默认 200000，可设 1000–20000000；达到后优先保留最新数据|
-|`CLOUDHELM_ALERTS_ENABLED`|是否评估节点与容器告警规则|默认 `true`；关闭后不产生新事件，但保留已有规则和历史事件|
+|`CLOUDHELM_ALERTS_ENABLED`|是否评估节点、容器与 AI 服务告警规则|默认 `true`；关闭后不产生新事件，但保留已有规则和历史事件|
 |`CLOUDHELM_ALERT_EVENT_RETENTION_HOURS`|告警事件保留时间|默认 2160 小时（90 天），可设 24–17520（两年）|
 |`CLOUDHELM_ALERT_EVENT_MAX_ROWS`|告警事件总行数硬上限|默认 10000，可设 100–1000000；每小时清理过期及超限事件|
 |`CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED`|企微告警消息全局开关|默认 `false`；启用后仍只向 H5“用户 → 权限与告警”中明确订阅且当前有权查看资源的成员发送|
@@ -358,7 +358,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-0.9.5/deploy
+cd cloudhelm-0.9.6/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -443,7 +443,7 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 
 容器磁盘数据来自 Docker `system df`：分别显示“可写层”和“镜像 + 可写层”，默认每 300 秒刷新。Docker volume、bind mount 和 tmpfs 属于容器外部存储，不计入容器可写层；它们所在文件系统的容量应通过节点磁盘或独立存储监控检查。
 
-Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样，节点采样还会记录已关联 AI 实例的业务数、健康接单容量和实例数，H5 显示最近 24 小时曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON，并同时执行两个容量边界：删除 7 天前的数据，且全库最多保留最新 200000 行。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过硬上限，实际可查看时长会自动缩短。
+Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样。节点采样汇总该节点已关联 AI 实例的业务数、健康接单容量和实例数，容器采样只汇总关联到该容器的实例；节点详情和容器详情均显示最近 24 小时业务负载曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON，并同时执行两个容量边界：删除 7 天前的数据，且全库最多保留最新 200000 行。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过硬上限，实际可查看时长会自动缩短。
 
 PostgreSQL 可以通过 Server 的 `.env` 提高保留量。例如 1 个节点、50 个容器按 5 分钟采样保留约半年，需要约 264 万行，可预留为：
 
@@ -607,12 +607,15 @@ GPU 节点每个状态上报周期执行一次固定命令 `/usr/bin/nvidia-smi 
 |宿主机负载过高|1 分钟负载 ÷ CPU 核数 ≥ 150%|4|警告|是|
 |宿主机 Swap 使用率过高|≥ 80%|3|警告|是|
 |宿主机指标采集失效|连续失败|2|严重|是|
+|AI 服务业务容量超限|统计窗口平均利用率 > 100%|1 个完整窗口|严重|是|
 
 GPU 使用率和显存占满在训练场景通常属于正常行为，网络与磁盘增长阈值也高度依赖链路和业务，因此这四条规则默认创建但关闭，管理员评估工作负载后再开启。GPU 温度取节点所有卡的最高值；显存使用率取所有可读取卡的最高百分比。掉卡检测在首次正常上报时记录卡数，只提高、不自动降低基线，因此单卡消失、`nvidia-smi` 异常或已有 GPU 节点误用非 GPU Agent 配置都会触发；计划移除或更换显卡后，可在节点 GPU 区域点击“重设 GPU 基线”，该操作只允许全局管理员并写入审计日志。
 
 网络突增使用收发总速率的指数动态基线，先预热 4 次心跳，并要求当前总流量至少 10 MiB/s 才参与判断，避免启动和空闲链路抖动。容器磁盘增长由 Agent 按真实 `docker system df` 查询间隔计算；默认每 300 秒采样一次，首次采样不计算增长，未刷新磁盘数据的普通 15 秒心跳不会重复累计。宿主机负载按逻辑 CPU 数归一化，100% 表示 1 分钟 load average 等于 CPU 核数。
 
-规则可应用到全部资源、某个环境、节点或容器。管理员还可通过 API 创建 CPU 等额外规则；修改规则会清空该规则旧的连续计数和活动状态，避免新阈值继承旧状态。系统只在状态从正常变为异常时写一条“触发”事件，从异常恢复时写一条“恢复”事件，不会每次心跳重复写库。
+AI 服务容量告警使用各服务自己的统计窗口（默认 5 分钟）：只有窗口数据完整且窗口平均业务数持续高于所有健康、就绪、接单实例的平均生效容量时才触发。这通常表示 ACS 未能成功扩容、扩容实例尚未就绪，或已经达到 ACS 最大副本数；业务数回落或新容量就绪后自动写入恢复事件。该告警覆盖本地与 ACS 的逻辑服务，只能使用“全部资源”范围；企微通知只发送给显式开启全局告警订阅的全部资源账号。
+
+其他规则可应用到全部资源、某个环境、节点或容器。管理员还可通过 API 创建 CPU 等额外规则；修改规则会清空该规则旧的连续计数和活动状态，避免新阈值继承旧状态。系统只在状态从正常变为异常时写一条“触发”事件，从异常恢复时写一条“恢复”事件，不会每次心跳重复写库。
 
 用户在“审计 → 监控告警”只能看到其资源授权范围内的事件。全局管理员和对该资源具有运维权限的运维人员可以确认事件；只读用户即使能够查看，也不能确认。确认只表示人员已知悉，不会关闭仍在持续的异常，恢复状态仍由后续真实指标决定。
 
@@ -635,7 +638,7 @@ CLOUDHELM_ALERT_NOTIFICATIONS_ENABLED=true
 
 目标成员还必须处于企微自建应用的可见范围内。消息使用现有 `CLOUDHELM_WECOM_AGENT_ID` 和 `CLOUDHELM_WECOM_SECRET` 调用企微应用消息接口，不需要新增 Secret。通知失败只记录在事件中并在页面显示，不会让 Agent 心跳失败；修复企微配置后，新事件会继续尝试发送，当前版本不会自动重发旧事件。若只需要页面告警，保持全局通知开关为 `false` 即可，界面中的订阅配置会保留但不会发送。
 
-全局管理员可在每条告警规则右侧点击“模拟”。Server 会要求全局企微通知、规则启用状态和规则通知开关都已开启，再从规则范围中选取一个匹配节点或容器，并使用与真实告警相同的权限和订阅逻辑计算全部接收人。模拟消息会显示规则、模拟资源和操作人，并明确注明“不代表真实故障”；它不会写入 `alert_events`、不会改变连续次数或活动状态，但发送结果和接收人数会进入操作审计。同一管理员对同一规则每 30 秒最多模拟一次；没有匹配资源或没有符合条件的订阅人时不会发送。
+全局管理员可在每条告警规则右侧点击“模拟”。Server 会要求全局企微通知、规则启用状态和规则通知开关都已开启，再从规则范围中选取一个匹配节点、容器或 AI 服务，并使用与真实告警相同的权限和订阅逻辑计算全部接收人。模拟消息会显示规则、模拟资源和操作人，并明确注明“不代表真实故障”；它不会写入 `alert_events`、不会改变连续次数或活动状态，但发送结果和接收人数会进入操作审计。同一管理员对同一规则每 30 秒最多模拟一次；没有匹配资源或没有符合条件的订阅人时不会发送。
 
 操作审计在数据库中继续保存稳定的动作代码，便于程序检索和升级兼容；H5、小程序和审计 API 同时返回中文操作、对象与常见详情。镜像名、容器 ID、企微 UserId 以及外部系统原始错误等技术值会保留原文，避免翻译后失真。
 
@@ -799,20 +802,20 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从 0.8.1 原地升级到 0.9.5
+## 从 0.8.1 原地升级到 0.9.6
 
-0.9.5 在 0.8.1 基础上创建混合云业务负载、实例、历史采样和伸缩事件表，增加模块期望镜像、企微 PC 扫码来源、服务发现端点、节点网关访问 IP 和节点业务历史字段，写入 `0008_hybrid_cloud_autoscaling` 至 `0013_node_business_history` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
+0.9.6 在 0.8.1 基础上创建混合云业务负载、实例、历史采样和伸缩事件表，增加模块期望镜像、企微 PC 扫码来源、服务发现端点、节点网关访问 IP 和节点业务历史字段，写入 `0008_hybrid_cloud_autoscaling` 至 `0013_node_business_history` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
 
-SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.9.5.bak` 一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [0.9.5 全新部署与 0.8.1 升级手册](docs/deploy-and-upgrade-0.9.5.md)。
+SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建 `cloudhelm.db.pre-0.9.6.bak` 一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [0.9.6 全新部署与 0.8.1 升级手册](docs/deploy-and-upgrade-0.9.6.md)。
 
 先在 `0.8.1` 部署目录停止 Server 并制作一致性备份：
 
 ```bash
 cd /实际路径/cloudhelm-0.8.1
 docker compose stop server
-sudo tar -czf ../cloudhelm-0.8.1-before-0.9.5.tar.gz -C cloudhelm-data .
-chmod 600 ../cloudhelm-0.8.1-before-0.9.5.tar.gz
-test -s ../cloudhelm-0.8.1-before-0.9.5.tar.gz
+sudo tar -czf ../cloudhelm-0.8.1-before-0.9.6.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-0.8.1-before-0.9.6.tar.gz
+test -s ../cloudhelm-0.8.1-before-0.9.6.tar.gz
 ```
 
 解压新版发布包后，把其中的 `docker-compose.yml` 复制到现有部署目录。保留现有 `.env` 和 `cloudhelm-data`，不要用示例文件覆盖它们：
@@ -827,7 +830,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-业务负载由各 AI 服务直接上报。使用容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 0.9.5，以便上报关联标签、等待 Docker 健康检查并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
+业务负载由各 AI 服务直接上报。使用容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 0.9.6，以便上报关联标签、等待 Docker 健康检查并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
 
 每台 Agent 节点复制新版 `deploy/agent.compose.yml`；GPU 节点继续叠加原有 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -945,7 +948,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 0.9.5
+bash scripts/package-release.sh 0.9.6
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -953,11 +956,11 @@ bash scripts/package-release.sh 0.9.5
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v0.9.5
-git push origin v0.9.5
+git tag v0.9.6
+git push origin v0.9.6
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:0.9.5`
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.5`
+- `ghcr.io/xbl916/cloud-helm-server:0.9.6`
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.6`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v0.9.5` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v0.9.6` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。

@@ -50,6 +50,14 @@ def record_metric_history(
         if container_ids
         else []
     )
+    business_rows_by_container: dict[
+        str, list[tuple[ServiceInstance, ScalingService]]
+    ] = {}
+    for instance, service in business_rows:
+        if instance.container_id:
+            business_rows_by_container.setdefault(instance.container_id, []).append(
+                (instance, service)
+            )
     active_businesses = sum(instance.active_businesses for instance, _ in business_rows)
     business_capacity = sum(
         instance.capacity_limit or service.capacity_per_replica
@@ -75,6 +83,15 @@ def record_metric_history(
         )
     )
     for item in containers:
+        container_business_rows = business_rows_by_container.get(item.id, [])
+        container_active_businesses = sum(
+            instance.active_businesses for instance, _ in container_business_rows
+        )
+        container_business_capacity = sum(
+            instance.capacity_limit or service.capacity_per_replica
+            for instance, service in container_business_rows
+            if instance.healthy and instance.ready and instance.accepting
+        )
         db.add(
             MetricSample(
                 target_type="container",
@@ -92,6 +109,9 @@ def record_metric_history(
                 block_write_bps=item.block_write_bps,
                 pids=item.pids,
                 restart_count=item.restart_count,
+                active_businesses=container_active_businesses,
+                business_capacity=container_business_capacity,
+                business_instances=len(container_business_rows),
             )
         )
     db.flush()

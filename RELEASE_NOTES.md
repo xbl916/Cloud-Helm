@@ -1,4 +1,13 @@
-# Cloud Helm 0.9.5
+# Cloud Helm 0.9.6
+
+## 容器业务曲线与容量不足告警
+
+- 节点详情继续显示最近 24 小时业务负载，并在容器详情增加当前容器独立的业务负载曲线。
+- 历史采样按容器自动关联关系分别记录业务数、健康接单容量和实例数，不会把同节点其他容器的负载混入当前容器。
+- 新增默认启用的“AI 服务业务容量超限”严重告警；等待服务完整统计窗口后，平均负载持续超过健康接单容量 100% 才触发，容量恢复后只产生一次恢复事件。
+- 服务级告警同时覆盖本地与 ACS 实例，可识别 ACS 扩容失败、扩容实例未就绪或达到最大副本数；事件进入现有监控告警中心。
+- 服务级企微告警只发送给明确开启全局告警订阅的全部资源账号，避免把无主机的 ACS 实例错误套入节点或容器授权。
+- 本次升级不增加数据库列；容器业务历史从部署 0.9.6 后的新采样开始积累，0.9.5 及以前的容器采样无法追溯补算。
 
 ## 实例清理与节点业务曲线
 
@@ -21,7 +30,7 @@
 
 - 屏幕宽度达到 960px 时切换为深色左侧导航和宽屏内容工作区，手机端原有布局保持不变。
 - 总览、节点、容器、GPU、告警、用户权限和混合云弹性页面使用适合桌面的多列网格、字号和卡片密度。
-- PC 登录页增加独立面板与背景层次；静态资源使用 0.9.5 缓存版本，升级后无需沿用旧 CSS 缓存。
+- PC 登录页增加独立面板与背景层次；静态资源使用 0.9.6 缓存版本，升级后无需沿用旧 CSS 缓存。
 
 ## 企业微信登录
 
@@ -56,7 +65,7 @@
 
 ## 数据与安全
 
-- 新增 `0010_pc_qr_logins`、`0011_gateway_service_discovery`、`0012_node_gateway_address` 和 `0013_node_business_history`；从 0.8.1 升级会依次执行 `0008` 至 `0013`，SQLite 升级前创建 `cloudhelm.db.pre-0.9.5.bak` 一致性备份。
+- 新增 `0010_pc_qr_logins`、`0011_gateway_service_discovery`、`0012_node_gateway_address` 和 `0013_node_business_history`；从 0.8.1 升级会依次执行 `0008` 至 `0013`，SQLite 升级前创建 `cloudhelm.db.pre-0.9.6.bak` 一致性备份。
 - 业务上报令牌只显示一次，Server 只保存 SHA-256 摘要；可在管理台轮换。
 - 生产部署建议把业务上报令牌作为只读 Secret 文件挂载；文件本身仍是明文，必须核对容器 UID/GID 可读性并纳入宿主机 Secret 管理，不建议放入 `.env`。
 - ACS API 地址和凭据只从 Server 环境或只读 Secret 文件读取，不进入数据库和前端；TLS 校验不能关闭。
@@ -65,12 +74,12 @@
 
 ## 兼容性
 
-- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.5 Agent。
+- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.6 Agent。
 - SQLite 与 PostgreSQL 均支持新表；既有用户、权限、节点、容器、指标、告警和审计数据原样保留。
-- `cloudhelm-0.9.5.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
-- `ghcr.io/xbl916/cloud-helm-server:0.9.5`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.5`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
+- `cloudhelm-0.9.6.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
+- `ghcr.io/xbl916/cloud-helm-server:0.9.6`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.6`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
 
 发布产物不包含 `.env`、ACS Token/CA、企微 Secret、数据库、自动备份、Agent 注册令牌或节点身份文件。
 
-全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.5.md`。
+全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.6.md`。
