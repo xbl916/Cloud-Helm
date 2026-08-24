@@ -1,10 +1,18 @@
-# Cloud Helm 0.9.3
+# Cloud Helm 0.9.4
+
+## 异构实例容量与配置分页
+
+- 同一 AI 服务中的每个本地或 ACS 实例可以独立设置业务承载上限，未设置时继承服务的新实例默认上限。
+- 伸缩利用率按统计窗口内所有健康接单实例的生效容量之和计算，支持 A10、L40S 等不同性能 GPU 混合承载同一服务。
+- 实例容量页显示本地实例所属节点、容器、Agent 识别到的 GPU 型号和网关路由地址，便于管理员准确配置。
+- 管理配置拆分为账号、用户权限、告警和 AI 弹性分页；每个 AI 服务再拆分为概览、实例容量、伸缩策略和镜像发布分页。
+- PC 与手机端分别优化实例容量列表布局，不再把所有策略、实例和发布操作挤在同一卡片中。
 
 ## PC 桌面控制台
 
 - 屏幕宽度达到 960px 时切换为深色左侧导航和宽屏内容工作区，手机端原有布局保持不变。
 - 总览、节点、容器、GPU、告警、用户权限和混合云弹性页面使用适合桌面的多列网格、字号和卡片密度。
-- PC 登录页增加独立面板与背景层次；静态资源使用 0.9.3 缓存版本，升级后无需沿用旧 CSS 缓存。
+- PC 登录页增加独立面板与背景层次；静态资源使用 0.9.4 缓存版本，升级后无需沿用旧 CSS 缓存。
 
 ## 企业微信登录
 
@@ -39,7 +47,7 @@
 
 ## 数据与安全
 
-- 新增 `0010_pc_qr_logins`、`0011_gateway_service_discovery` 和 `0012_node_gateway_address`；从 0.8.1 升级会依次执行 `0008` 至 `0012`，SQLite 升级前创建 `cloudhelm.db.pre-0.9.3.bak` 一致性备份。
+- 新增 `0010_pc_qr_logins`、`0011_gateway_service_discovery` 和 `0012_node_gateway_address`；从 0.8.1 升级会依次执行 `0008` 至 `0012`，SQLite 升级前创建 `cloudhelm.db.pre-0.9.4.bak` 一致性备份。
 - 业务上报令牌只显示一次，Server 只保存 SHA-256 摘要；可在管理台轮换。
 - 生产部署建议把业务上报令牌作为只读 Secret 文件挂载；文件本身仍是明文，必须核对容器 UID/GID 可读性并纳入宿主机 Secret 管理，不建议放入 `.env`。
 - ACS API 地址和凭据只从 Server 环境或只读 Secret 文件读取，不进入数据库和前端；TLS 校验不能关闭。
@@ -48,12 +56,12 @@
 
 ## 兼容性
 
-- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.3 Agent。
+- 业务负载上报仍兼容旧 Agent；使用标签自动关联或分阶段镜像发布时必须升级到 0.9.4 Agent。
 - SQLite 与 PostgreSQL 均支持新表；既有用户、权限、节点、容器、指标、告警和审计数据原样保留。
-- `cloudhelm-0.9.3.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
-- `ghcr.io/xbl916/cloud-helm-server:0.9.3`：`linux/amd64`、`linux/arm64`。
-- `ghcr.io/xbl916/cloud-helm-agent:0.9.3`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
+- `cloudhelm-0.9.4.tar.gz` 与 `.sha256`：架构无关源码和部署文件。
+- `ghcr.io/xbl916/cloud-helm-server:0.9.4`：`linux/amd64`、`linux/arm64`。
+- `ghcr.io/xbl916/cloud-helm-agent:0.9.4`：`linux/amd64`、`linux/arm64`、`linux/arm/v7`。
 
 发布产物不包含 `.env`、ACS Token/CA、企微 Secret、数据库、自动备份、Agent 注册令牌或节点身份文件。
 
-全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.3.md`。
+全新部署、0.8.1 数据备份、Server 原地迁移、Agent 逐节点升级和回退命令见 `docs/deploy-and-upgrade-0.9.4.md`。

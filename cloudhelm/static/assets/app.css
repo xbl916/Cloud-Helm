@@ -13,6 +13,8 @@ html,body{width:100%;max-width:100%;overflow-x:hidden;overflow-x:clip}.app-view,
 @media(max-width:390px){.app-content{padding-left:10px;padding-right:10px}.access-panel{padding-left:9px;padding-right:9px}.access-row{grid-template-columns:auto minmax(0,1fr) 72px}.access-row.depth-1{margin-left:5px}.access-row.depth-2{margin-left:10px}.access-row.depth-3{margin-left:15px}.user-actions button{max-width:100%;white-space:normal}}
 @media(max-width:360px){.container-card{flex-wrap:wrap}.container-resource{flex:1 0 100%;padding-left:25px;display:grid;grid-template-columns:1fr 1fr;gap:4px}.container-resource span:nth-of-type(n+2){display:block}.access-panel>footer{grid-template-columns:1fr 1fr}}
 
+.settings-tabs{display:flex;gap:7px;overflow-x:auto;margin:0 0 18px;padding:4px;background:#e8eff1;border-radius:13px;scrollbar-width:none}.settings-tabs button{flex:0 0 auto;border:0;border-radius:10px;padding:9px 13px;background:transparent;color:#657b85;font-size:11px;white-space:nowrap}.settings-tabs button.active{background:white;color:#0b746e;font-weight:800;box-shadow:0 3px 12px rgba(22,52,69,.08)}[data-profile-panel].profile-tab-hidden{display:none!important}.scaling-card-tabs{display:flex;gap:6px;margin:16px 0 4px;padding:4px;background:#eef3f5;border-radius:11px;overflow-x:auto;scrollbar-width:none}.scaling-card-tabs button{flex:0 0 auto;border:0;border-radius:8px;padding:8px 12px;background:transparent;color:#677f89;font-size:10px}.scaling-card-tabs button.active{background:white;color:#137d73;font-weight:800;box-shadow:0 2px 8px rgba(22,52,69,.07)}.scaling-card-panel.panel-hidden{display:none!important}.scaling-capacity-note{margin:11px 0;padding:11px 13px;border-radius:10px;background:#eef8f6;color:#47716e;font-size:10px;line-height:1.6}.scaling-instance-head{display:grid;grid-template-columns:minmax(0,1.5fr) 55px 55px 90px 48px 48px;gap:7px;padding:8px 0;color:#81939b;font-size:8px}.scaling-instance-identity strong,.scaling-instance-identity small{display:block;overflow-wrap:anywhere}.scaling-instance-identity strong{font-size:10px;color:#294a57}.scaling-instance-identity small{margin-top:3px;color:#81939b}.capacity-effective{font-weight:800;color:#176f68}.capacity-inherited{display:block;margin-top:2px;color:#8a9ba2;font-size:8px}
+
 /* Desktop console: keep the compact mobile experience below 960px. */
 @media (min-width: 960px) {
   :root {
@@ -212,6 +214,7 @@ html,body{width:100%;max-width:100%;overflow-x:hidden;overflow-x:clip}.app-view,
   }
 
   #page-profile > .page-title,
+  #page-profile > .settings-tabs,
   #page-profile > .admin-users { grid-column: 1 / -1; }
   #page-profile > .danger-outline { width: 180px; margin-top: 0; }
 
@@ -236,6 +239,11 @@ html,body{width:100%;max-width:100%;overflow-x:hidden;overflow-x:clip}.app-view,
   .user-form { width: min(540px, 100%); padding: 30px; }
   .confirm-card { width: min(430px, 100%); }
   .toast { top: 28px; }
+
+  .settings-tabs { width: fit-content; margin-bottom: 26px; padding: 5px; }
+  .settings-tabs button { padding: 10px 17px; font-size: 12px; }
+  .scaling-card-tabs { width: fit-content; margin-top: 19px; }
+  .scaling-card-tabs button { padding: 9px 15px; font-size: 11px; }
 }
 
 @media (min-width: 1280px) {

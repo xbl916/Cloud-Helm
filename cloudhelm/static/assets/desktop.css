@@ -1,4 +1,28 @@
 /* Module-level desktop refinements. Core shell rules live in app.css. */
+.scaling-instance-identity { min-width: 0; }
+.scaling-instance-identity strong,
+.scaling-instance-identity small { display: block; overflow-wrap: anywhere; }
+.scaling-instance-identity strong { color: #294a57; font-size: 10px; }
+.scaling-instance-identity small { margin-top: 3px; color: #81939b; font-size: 8px; line-height: 1.45; }
+.capacity-effective b { display: block; color: #176f68; font-size: 12px; }
+.capacity-inherited { display: block; margin-top: 2px; color: #8a9ba2; font-size: 8px; }
+
+@media (max-width: 650px) {
+  .scaling-instance-head { display: none; }
+  .scaling-instance {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px 0;
+  }
+
+  .scaling-instance-identity { grid-column: 1 / -1; }
+  .scaling-instance > span { font-size: 9px; }
+  .scaling-instance .capacity-effective { align-self: center; }
+  .scaling-instance input { margin-top: 0; }
+  .scaling-instance button,
+  .scaling-instance button:last-child { grid-column: auto; }
+}
+
 @media (min-width: 960px) {
   .alert-event-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -65,10 +89,19 @@
   .scaling-instances { margin-top: 18px; }
   .scaling-instances h4 { font-size: 12px; }
   .scaling-instance {
-    grid-template-columns: minmax(240px, 1.8fr) 76px 76px 120px 60px 60px;
+    grid-template-columns: minmax(280px, 1.8fr) 70px 88px 86px 120px 60px 60px;
     padding: 11px 0;
     font-size: 10px;
   }
+
+  .scaling-instance-head {
+    grid-template-columns: minmax(280px, 1.8fr) 70px 88px 86px 120px 120px;
+    padding: 9px 0;
+    font-size: 9px;
+  }
+
+  .scaling-instance-identity strong { font-size: 11px; }
+  .scaling-instance-identity small { font-size: 9px; }
 
   .scaling-event { padding: 14px 16px; }
   .scaling-event strong, .scaling-event span { font-size: 11px; }

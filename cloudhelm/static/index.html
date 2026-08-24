@@ -7,11 +7,11 @@
     <meta name="description" content="云舵 Cloud Helm 多节点容器运维控制台" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/app.css?v=0.9.3" />
-    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.9.3" />
-    <link rel="stylesheet" href="/assets/gpu.css?v=0.9.3" />
-    <link rel="stylesheet" href="/assets/scaling.css?v=0.9.3" />
-    <link rel="stylesheet" href="/assets/desktop.css?v=0.9.3" />
+    <link rel="stylesheet" href="/assets/app.css?v=0.9.4" />
+    <link rel="stylesheet" href="/assets/access-alerts.css?v=0.9.4" />
+    <link rel="stylesheet" href="/assets/gpu.css?v=0.9.4" />
+    <link rel="stylesheet" href="/assets/scaling.css?v=0.9.4" />
+    <link rel="stylesheet" href="/assets/desktop.css?v=0.9.4" />
     <title>云舵 Cloud Helm</title>
   </head>
   <body>
@@ -85,29 +85,35 @@
 
         <section id="page-profile" class="page">
           <div class="page-title"><p class="eyebrow">ACCOUNT</p><h1>我的账号</h1></div>
-          <article class="profile-card"><div id="profile-avatar" class="large-avatar">云</div><div><strong id="profile-name">系统管理员</strong><span id="profile-role">管理员</span></div></article>
-          <div class="settings-card">
+          <nav id="profile-tabs" class="settings-tabs" aria-label="管理配置分页">
+            <button class="active" type="button" data-profile-tab="account">账号与安全</button>
+            <button class="hidden" type="button" data-profile-tab="users">用户与权限</button>
+            <button class="hidden" type="button" data-profile-tab="alerts">告警规则</button>
+            <button class="hidden" type="button" data-profile-tab="scaling">AI 服务与弹性</button>
+          </nav>
+          <article class="profile-card" data-profile-panel="account"><div id="profile-avatar" class="large-avatar">云</div><div><strong id="profile-name">系统管理员</strong><span id="profile-role">管理员</span></div></article>
+          <div class="settings-card" data-profile-panel="account">
             <div><span>身份验证</span><strong>企业微信强制认证</strong></div>
             <div><span>节点通信</span><strong>独立令牌</strong></div>
-            <div><span>版本</span><strong>Cloud Helm 0.9.3</strong></div>
+            <div><span>版本</span><strong>Cloud Helm 0.9.4</strong></div>
           </div>
-          <section id="admin-users" class="admin-users hidden">
+          <section id="admin-users" class="admin-users hidden" data-profile-panel="users">
             <div class="section-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>用户与权限</h2></div><button id="add-user-button">添加用户</button></div>
             <div id="user-list" class="user-list"></div>
           </section>
-          <section id="admin-alert-rules" class="admin-users hidden">
+          <section id="admin-alert-rules" class="admin-users hidden" data-profile-panel="alerts">
             <div class="section-heading"><div><p class="eyebrow">ALERT RULES</p><h2>告警规则</h2></div><button id="refresh-alert-rules">刷新</button></div>
             <p class="access-hint">每条规则可按真实资源范围和人员订阅发送模拟告警；消息会明确标记为模拟，不生成真实故障事件。</p>
             <div id="alert-rule-list" class="alert-rule-list"></div>
           </section>
-          <section id="admin-scaling" class="admin-users hidden">
+          <section id="admin-scaling" class="admin-users hidden" data-profile-panel="scaling">
             <div class="section-heading"><div><p class="eyebrow">HYBRID CLOUD</p><h2>本地基座与 ACS 弹性</h2></div><button id="add-scaling-service">添加服务</button></div>
             <p class="access-hint">本地实例保持常驻；达到平均负载阈值或本地实例故障时扩容 ACS，缩容只作用于已完成排空的 ACS 实例。</p>
             <div id="scaling-service-list" class="scaling-service-list"></div>
             <div class="section-heading scaling-events-heading"><div><p class="eyebrow">SCALING EVENTS</p><h2>弹性事件</h2></div><button id="refresh-scaling">刷新</button></div>
             <div id="scaling-event-list" class="scaling-event-list"></div>
           </section>
-          <button id="logout-button" class="danger-outline">退出登录</button>
+          <button id="logout-button" class="danger-outline" data-profile-panel="account">退出登录</button>
         </section>
 
         <section id="page-containers" class="page">
@@ -201,6 +207,6 @@
         <div id="scaling-token-result" class="scaling-token-result hidden"><strong>服务 ID</strong><code id="scaling-service-id-result"></code><strong>业务上报令牌（仅显示一次）</strong><p>请立即保存到本地与 ACS 服务的 Secret 中；本地与 ACS 的同一服务共用这组值。</p><code id="scaling-token-value"></code><button type="button" data-close-scaling class="primary-small">我已保存</button></div>
       </form>
     </div>
-    <script src="/assets/app.js?v=0.9.3" defer></script>
+    <script src="/assets/app.js?v=0.9.4" defer></script>
   </body>
 </html>

@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.3" in compose
+    assert f"cloud-helm-{service}:0.9.4" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -54,6 +54,19 @@ def test_desktop_stylesheet_is_packaged_and_linked_after_module_styles():
     assert "@media (min-width: 960px)" in desktop
     assert "@media (min-width: 960px)" in app
     assert "--desktop-rail" in app
+
+
+def test_management_and_scaling_settings_are_split_into_tabs():
+    page = (ROOT / "cloudhelm/static/index.html").read_text(encoding="utf-8")
+    script = (ROOT / "cloudhelm/static/assets/app.js").read_text(encoding="utf-8")
+
+    for tab in ("account", "users", "alerts", "scaling"):
+        assert f'data-profile-tab="{tab}"' in page
+        assert f'data-profile-panel="{tab}"' in page
+    for tab in ("summary", "instances", "policy", "release"):
+        assert f'data-scaling-tab="{tab}"' in script
+    assert "gpu_names" in script
+    assert "实例业务上限已保存" in script
 
 
 def test_server_entrypoint_drops_identity_and_all_capabilities():

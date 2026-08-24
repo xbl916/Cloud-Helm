@@ -40,10 +40,51 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def _instance_out(db: Db, instance: ServiceInstance, default_capacity: int) -> dict:
+    container = (
+        db.get(Container, instance.container_id) if instance.container_id else None
+    )
+    node = db.get(Node, container.node_id) if container else None
+    try:
+        gpu_devices = (
+            json.loads(container.gpu_devices_json or "[]") if container else []
+        )
+    except (json.JSONDecodeError, TypeError):
+        gpu_devices = []
+    try:
+        node_gpus = json.loads(node.gpus_json or "[]") if node else []
+    except (json.JSONDecodeError, TypeError):
+        node_gpus = []
+    device_ids = (
+        {str(item) for item in gpu_devices} if isinstance(gpu_devices, list) else set()
+    )
+    assigned_gpus = (
+        [
+            item
+            for item in node_gpus
+            if isinstance(item, dict)
+            and (
+                bool(container and container.gpu_all)
+                or str(item.get("index")) in device_ids
+                or str(item.get("uuid")) in device_ids
+            )
+        ]
+        if isinstance(node_gpus, list)
+        else []
+    )
     return {
         "id": instance.id,
         "instance_id": instance.instance_id,
         "container_id": instance.container_id,
+        "container_name": container.name if container else None,
+        "node_name": node.name if node else None,
+        "gpu_all": bool(container and container.gpu_all),
+        "gpu_devices": [str(item) for item in gpu_devices]
+        if isinstance(gpu_devices, list)
+        else [],
+        "gpu_names": [
+            str(item.get("name") or item.get("uuid") or f"GPU {item.get('index')}")
+            for item in assigned_gpus
+        ],
         "pool": instance.pool,
         "active_businesses": instance.active_businesses,
         "capacity_limit": instance.capacity_limit,

@@ -98,6 +98,57 @@ def test_business_service_report_and_instance_capacity(
     assert ignored.json()["monitored"] is False
 
 
+def test_heterogeneous_instance_capacities_drive_service_utilization():
+    now = datetime.now(UTC)
+    provider = FakeAcsProvider(0)
+    with SessionLocal() as db:
+        service = ScalingService(
+            name=f"VLM-mixed-gpu-{uuid4()}",
+            service_type="vlm",
+            report_token_hash=digest_token("unused-token"),
+            capacity_per_replica=10,
+            autoscaling_enabled=False,
+            namespace="inference",
+            workload_kind="Deployment",
+            workload_name="vlm-mixed-gpu",
+        )
+        db.add(service)
+        db.flush()
+        db.add_all(
+            [
+                ServiceInstance(
+                    service_id=service.id,
+                    instance_id="vlm-a10",
+                    pool="local",
+                    capacity_limit=8,
+                    active_businesses=4,
+                    updated_at=now,
+                ),
+                ServiceInstance(
+                    service_id=service.id,
+                    instance_id="vlm-l40s",
+                    pool="local",
+                    capacity_limit=24,
+                    active_businesses=12,
+                    updated_at=now,
+                ),
+            ]
+        )
+        db.flush()
+
+        evaluate_service(db, service, now, _enabled_settings(), provider)
+
+        sample = db.scalar(
+            select(BusinessMetricSample)
+            .where(BusinessMetricSample.service_id == service.id)
+            .order_by(BusinessMetricSample.sampled_at.desc())
+        )
+        assert sample is not None
+        assert sample.total_capacity == 32
+        assert sample.active_businesses == 16
+        assert service.utilization_percent == 50
+
+
 def test_gateway_discovery_adds_and_removes_only_eligible_endpoints(
     client, admin_headers: dict[str, str]
 ):
@@ -360,7 +411,7 @@ def test_agent_labels_auto_bind_only_local_service_instances(
             "agent_key": f"auto-bind-agent-{uuid4()}",
             "name": "自动关联节点",
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.3",
+            "agent_version": "0.9.4",
         },
     )
     assert enrolled.status_code == 200
@@ -373,13 +424,22 @@ def test_agent_labels_auto_bind_only_local_service_instances(
         },
         json={
             "hostname": "auto-bind-node",
-            "agent_version": "0.9.3",
+            "agent_version": "0.9.4",
+            "gpu_status": "ok",
+            "gpus": [
+                {
+                    "index": 0,
+                    "uuid": "GPU-L40S-AUTO-BIND",
+                    "name": "NVIDIA L40S",
+                }
+            ],
             "containers": [
                 {
                     "docker_id": "local-auto-container-123456",
                     "name": "vlm-local-auto",
                     "image": "example/vlm:1.0",
                     "status": "running",
+                    "gpu_devices": ["0"],
                     "labels": {
                         "cloudhelm.service_id": service["id"],
                         "cloudhelm.instance_id": "vlm-local-auto-1",
@@ -430,6 +490,18 @@ def test_agent_labels_auto_bind_only_local_service_instances(
     assert repeated.status_code == 200
     assert repeated.json()["container_id"] == local_container_id
     assert repeated.json()["container_linked"] is True
+
+    listed = client.get("/api/v1/scaling/services")
+    target = next(item for item in listed.json() if item["id"] == service["id"])
+    local_out = next(
+        item
+        for item in target["instances"]
+        if item["instance_id"] == "vlm-local-auto-1"
+    )
+    assert local_out["node_name"] == "自动关联节点"
+    assert local_out["container_name"] == "vlm-local-auto"
+    assert local_out["gpu_devices"] == ["0"]
+    assert local_out["gpu_names"] == ["NVIDIA L40S"]
 
     rejected = client.post(
         f"/api/v1/service-metrics/{service['id']}/report",
