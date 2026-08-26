@@ -218,6 +218,7 @@ def test_agent_inventory_and_task_flow(
         json={"action": "logs", "tail": 100},
     )
     assert queued.status_code == 202
+    assert queued.json()["created_at"].endswith("+00:00")
     task_id = queued.json()["id"]
 
     task = client.get("/api/v1/agent/tasks/next", headers=agent_headers)
@@ -235,6 +236,8 @@ def test_agent_inventory_and_task_flow(
     completed = client.get(f"/api/v1/tasks/{task_id}", headers=admin_headers)
     assert completed.status_code == 200
     assert completed.json()["status"] == "success"
+    assert completed.json()["created_at"].endswith("+00:00")
+    assert completed.json()["finished_at"].endswith("+00:00")
     assert "service ready" in completed.json()["result"]
     audit = client.get("/api/v1/audit?limit=20", headers=admin_headers)
     log_result_audit = next(

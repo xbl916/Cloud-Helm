@@ -11,6 +11,25 @@ function time(value) {
   return new Date(value).toLocaleString("zh-CN", {hour12: false})
 }
 
+function padDatePart(value) { return String(value).padStart(2, "0") }
+
+function logTimestamp(date, fraction = "") {
+  const offsetMinutes = -date.getTimezoneOffset()
+  const sign = offsetMinutes >= 0 ? "+" : "-"
+  const absoluteOffset = Math.abs(offsetMinutes)
+  return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}:${padDatePart(date.getSeconds())}${fraction}${sign}${padDatePart(Math.floor(absoluteOffset / 60))}:${padDatePart(absoluteOffset % 60)}`
+}
+
+function logs(value) {
+  return String(value || "").replace(
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})(?=\s)/gm,
+    (original, seconds, fraction = "", zone) => {
+      const parsed = new Date(`${seconds}${fraction ? fraction.slice(0, 4) : ""}${zone}`)
+      return Number.isNaN(parsed.getTime()) ? original : logTimestamp(parsed, fraction)
+    }
+  )
+}
+
 function metric(value, suffix = "", digits = 0) {
   return value === null || value === undefined ? "—" : `${Number(value).toFixed(digits)}${suffix}`
 }
@@ -27,4 +46,4 @@ function duration(value) {
   return `${minutes} 分钟`
 }
 
-module.exports = {bytes, time, metric, rate, duration}
+module.exports = {bytes, time, logs, metric, rate, duration}

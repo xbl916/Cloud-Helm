@@ -1,8 +1,8 @@
 import ipaddress
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 from cloudhelm.models import TaskStatus, UserRole
 
@@ -291,6 +291,13 @@ class TaskOut(BaseModel):
     finished_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("created_at", "finished_at")
+    def serialize_utc_datetime(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return aware.astimezone(UTC).isoformat()
 
 
 class BusinessMetricReport(BaseModel):

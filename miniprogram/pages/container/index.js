@@ -97,7 +97,7 @@ Page({
       const queued = await api.post(`/containers/${this.containerId}/actions`, action === "logs" ? {action, tail: 200} : {action, ...extra})
       const task = await this.waitTask(queued.id)
       if (task.status !== "success") throw new Error(task.error || "Agent 执行失败")
-      if (action === "logs") this.setData({logs: task.result || "（日志为空）"})
+      if (action === "logs") this.setData({logs: task.result ? format.logs(task.result) : "（日志为空）"})
       else { wx.showToast({title: action === "update_image" ? "镜像已更新" : "操作成功", icon: "success"}); await this.load() }
     } catch (error) {
       if (action === "logs") this.setData({logs: `读取失败：${error.message}`})

@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.7" in compose
+    assert f"cloud-helm-{service}:0.9.8" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -78,6 +78,23 @@ def test_management_and_scaling_settings_are_split_into_tabs():
         )
     ]
     assert "businessHistoryCard(samples)" in container_history
+
+
+def test_container_logs_are_rendered_in_the_viewing_device_timezone():
+    page = (ROOT / "cloudhelm/static/index.html").read_text(encoding="utf-8")
+    script = (ROOT / "cloudhelm/static/assets/app.js").read_text(encoding="utf-8")
+    mini_format = (ROOT / "miniprogram/utils/format.js").read_text(encoding="utf-8")
+    mini_container = (ROOT / "miniprogram/pages/container/index.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "app.js?v=0.9.8-timezone" in page
+    assert "formatLogsForDevice(result.result)" in script
+    assert "getTimezoneOffset()" in script
+    assert "formatDeviceTime(c.finished_at)" in script
+    assert "function logs(value)" in mini_format
+    assert "getTimezoneOffset()" in mini_format
+    assert "format.logs(task.result)" in mini_container
 
 
 def test_server_entrypoint_drops_identity_and_all_capabilities():

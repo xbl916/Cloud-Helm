@@ -37,4 +37,4 @@
     </block>
   </block>
 </view>
-<view wx:if="{{logsVisible}}" class="logs-mask"><view class="logs-panel"><view class="row"><view class="row-title">{{container.name}} · 日志</view><text class="close" bindtap="closeLogs">×</text></view><scroll-view class="logs" scroll-y="true"><text selectable="true">{{logs}}</text></scroll-view><button class="button secondary" bindtap="closeLogs">关闭</button></view></view>
+<view wx:if="{{logsVisible}}" class="logs-mask"><view class="logs-panel"><view class="row"><view class="row-title">{{container.name}} · 日志（本设备时区）</view><text class="close" bindtap="closeLogs">×</text></view><scroll-view class="logs" scroll-y="true"><text selectable="true">{{logs}}</text></scroll-view><button class="button secondary" bindtap="closeLogs">关闭</button></view></view>
