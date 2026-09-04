@@ -2,45 +2,49 @@
 
 ## 当前两种更新方式
 
-Cloud Helm 保留原有的单容器“更换 Tag”操作。它会先拉取镜像，再停止旧容器、原位创建新容器；启动或 Docker 健康检查失败时自动恢复旧容器。该操作不会修改宿主机 Compose YAML，因此只适合临时修复。
+Cloud Helm 保留原有的单容器“更换 Tag”操作。它会先拉取镜像并校验 Compose，再停止旧容器、原位创建新容器；启动或 Docker 健康检查失败时自动恢复旧容器和 Compose。
 
 混合云模块应使用“模块期望镜像”发布。期望镜像同时作用于：
 
 - 模块下所有已关联的本地 `local` 服务实例；
 - 对应 ACS Deployment 或 StatefulSet 的目标容器；
 - 未来由弹性策略新创建的 ACS Pod；
-- Compose 再次启动旧 Tag 后的平台自动漂移纠正。
+- 设备白名单目录内对应 Compose service 的镜像 Tag。
 
-平台不会直接修改宿主机 YAML。Agent 继续只访问 Docker API，不获得 Compose 目录的任意文件写权限。Compose 文件仍建议在代码仓库中同步更新；即使暂时未同步，平台也会把重新出现的旧镜像逐个纠正到期望版本。
+Agent 只获得管理员明确挂载并通过 `CLOUDHELM_AGENT_COMPOSE_ROOTS` 声明的 Compose 目录写权限，不扫描整个宿主机。无法唯一定位 Compose 文件时，升级会在旧容器停止前失败。
 
 ## 发布顺序
 
 ```text
-设置模块期望镜像
+设置模块期望镜像并创建发布单
         │
         ▼
-ACS 至少启动 1 个保护副本并滚动更新镜像
-        │ 全部 Ready
+所有本地节点预拉取镜像并检查 Compose
         ▼
-本地实例 1：拉镜像 → 停旧容器 → 启新容器
-        │ Docker 健康 + 业务重新上报 Ready
+单本地实例：启动独立旧版本 ACS 保护实例并确认可接单
+        │
         ▼
-本地实例 2：拉镜像 → 停旧容器 → 启新容器
+本地实例 1：网关摘除 → 排空 → 更新 Compose → 切换容器
+        │ Docker 健康 + 业务重新上报 Ready/accepting
+        ▼
+本地实例 2：网关摘除 → 排空 → 更新 Compose → 切换容器
         │
        ...
         ▼
-ACS 与本地镜像版本统一，发布完成
+更新高负载 ACS 模板 → 排空升级保护实例 → 发布完成
 ```
 
 GPU 资源有限时，单个本地实例允许先停止旧容器再原位启动新容器。同一模块无论分布在多少节点，始终只存在一个未完成的本地更新任务。
 
 进入下一实例前必须满足：
 
-1. Agent 返回镜像更新任务成功；
-2. 新 Docker 容器处于 `running`，且 Docker Health 不是 `unhealthy`；
-3. 容器镜像与模块期望镜像一致；
-4. 对应业务实例在本次替换完成后重新上报；
-5. 上报包含 `healthy=true`、`ready=true`、`accepting=true`。
+1. 实例已经从统一网关路由摘除；
+2. 上报包含 `accepting=false`、`active_businesses=0`；
+3. Agent 返回镜像和 Compose 更新任务成功；
+4. 新 Docker 容器处于 `running`，且 Docker Health 不是 `unhealthy`；
+5. 容器镜像与模块期望镜像一致；
+6. 对应业务实例在本次替换完成后重新上报；
+7. 上报包含 `healthy=true`、`ready=true`、`accepting=true`。
 
 如果镜像启动、Docker 健康检查或任务执行失败，Agent 自动恢复该节点旧容器，平台停止整批发布。如果新进程已经启动但没有重新进行业务健康上报，平台也会停在当前实例，不会继续更新其他节点。发布超时默认一小时，可通过 `CLOUDHELM_IMAGE_RELEASE_TIMEOUT_SECONDS` 调整。
 
@@ -74,6 +78,13 @@ Content-Type: application/json
 POST /api/v1/scaling/services/{service_id}/release/rollback
 ```
 
+查询至少三个历史回滚目标，或回滚到指定版本：
+
+```http
+GET /api/v1/scaling/services/{service_id}/versions
+POST /api/v1/scaling/services/{service_id}/release/rollback/{version_id}
+```
+
 查询服务列表即可查看期望版本和进度：
 
 ```http
@@ -85,10 +96,11 @@ GET /api/v1/scaling/services
 |字段|说明|
 |---|---|
 |`desired_image`|模块当前期望镜像，也是后续漂移纠正目标。|
-|`previous_image`|最近一次发布前的版本，回滚接口使用它。|
-|`release_status`|`preparing_acs`、`waiting_acs`、`updating_local`、`verifying_local`、`completed` 或 `failed`。|
+|`previous_image`|兼容字段，记录最近一次发布前的版本。完整回滚目标从版本历史接口读取。|
+|`release_status`|预检查、保护实例、排空、本地切换、ACS 模板更新和保护实例回收等当前阶段。|
 |`release_error`|发布停止的原因。|
 |`release_task_id`|当前唯一的本地更新任务。|
+|`active_release_id`|当前独立发布单 ID，可用于查询逐实例步骤。|
 
 所有发布和回滚操作要求全局管理员权限并写入审计日志。
 

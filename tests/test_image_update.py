@@ -108,6 +108,39 @@ def test_agent_recreates_container_and_reuses_runtime_configuration(monkeypatch)
     old.remove.assert_called_once_with(force=True, v=False)
 
 
+def test_agent_prepares_image_and_compose_before_stopping_container():
+    runtime = DockerRuntime.__new__(DockerRuntime)
+    runtime.client = MagicMock()
+    runtime.compose_manager = MagicMock()
+    old = MagicMock()
+    old.attrs = {
+        "Config": {
+            "Image": "example/vlm:1.0",
+            "Labels": {
+                "com.docker.compose.project": "inference",
+                "com.docker.compose.service": "vlm",
+            },
+        }
+    }
+    runtime.client.containers.get.return_value = old
+    runtime.compose_manager.validate_image.return_value = "/srv/ai/compose.yml"
+
+    result = runtime.execute(
+        "prepare-container-123456",
+        "prepare_image",
+        {
+            "expected_image": "example/vlm:1.0",
+            "target_image": "example/vlm:2.0",
+        },
+    )
+
+    assert "image prepared: docker.io/example/vlm:2.0" in result
+    runtime.client.images.pull.assert_called_once_with("docker.io/example/vlm:2.0")
+    runtime.compose_manager.validate_image.assert_called_once()
+    old.stop.assert_not_called()
+    old.rename.assert_not_called()
+
+
 def test_agent_rolls_back_old_container_if_replacement_creation_fails(monkeypatch):
     runtime = DockerRuntime.__new__(DockerRuntime)
     runtime.client = MagicMock()

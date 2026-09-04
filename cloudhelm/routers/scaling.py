@@ -14,10 +14,15 @@ from cloudhelm.dependencies import Admin, Config, CurrentUser, Db
 from cloudhelm.image_reference import parse_tagged_image, validate_tag_change
 from cloudhelm.models import (
     Container,
+    ImageRelease,
+    ImageReleaseStep,
     Node,
     ScalingEvent,
     ScalingService,
+    ServiceImageVersion,
     ServiceInstance,
+    Task,
+    TaskStatus,
     User,
 )
 from cloudhelm.releases import ACTIVE_RELEASE_STATUSES, resolve_local_container
@@ -132,6 +137,7 @@ def _service_out(
         "release_status": service.release_status,
         "release_error": service.release_error,
         "release_task_id": service.release_task_id,
+        "active_release_id": service.active_release_id,
         "release_started_at": _iso(service.release_started_at),
         "release_updated_at": _iso(service.release_updated_at),
         "current_replicas": service.current_replicas,
@@ -196,13 +202,13 @@ def report_business_load(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="业务指标上报凭据无效",
         )
-    if payload.pool == "acs" and payload.container_id:
+    if payload.pool != "local" and payload.container_id:
         raise HTTPException(
             status_code=422,
             detail="ACS 实例没有主机 Agent，不能关联本地容器",
         )
     if (
-        payload.pool == "acs"
+        payload.pool != "local"
         and payload.endpoint_scheme is not None
         and payload.endpoint_host is None
     ):
@@ -253,7 +259,7 @@ def report_business_load(
     now = datetime.now(UTC)
     if payload.pool == "local" and container:
         instance.container_id = container.id
-    elif payload.pool == "acs":
+    elif payload.pool != "local":
         instance.container_id = None
     instance.active_businesses = payload.active_businesses
     instance.pool = payload.pool
@@ -267,6 +273,20 @@ def report_business_load(
         payload.metadata, ensure_ascii=False, separators=(",", ":")
     )
     instance.updated_at = now
+    if (
+        instance.desired_state == "draining"
+        and not instance.accepting
+        and instance.active_businesses == 0
+    ):
+        instance.desired_state = "maintenance"
+    elif (
+        instance.desired_state == "restoring"
+        and instance.healthy
+        and instance.ready
+        and instance.accepting
+    ):
+        instance.desired_state = "serve"
+        instance.drain_requested_at = None
     service.last_report_at = now
     db.commit()
     effective_host = _effective_endpoint_host(db, instance)
@@ -513,6 +533,9 @@ def _start_image_release(
     target_image: str,
     admin: User,
     now: datetime,
+    *,
+    kind: str = "release",
+    rollback_of_release_id: str | None = None,
 ) -> str:
     if service.release_status in ACTIVE_RELEASE_STATUSES:
         raise HTTPException(status_code=409, detail="已有镜像发布正在进行")
@@ -534,6 +557,16 @@ def _start_image_release(
         raise HTTPException(status_code=409, detail="模块没有关联且受监控的本地实例")
     local_images: list[str] = []
     for instance in local_instances:
+        if (
+            instance.desired_state != "serve"
+            or not instance.healthy
+            or not instance.ready
+            or not instance.accepting
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"本地实例 {instance.instance_id} 尚未处于健康接单状态",
+            )
         container = resolve_local_container(db, instance)
         if not container:
             raise HTTPException(
@@ -545,6 +578,17 @@ def _start_image_release(
                 status_code=409,
                 detail=f"本地实例 {instance.instance_id} 当前不可健康替换",
             )
+        active_task = db.scalar(
+            select(Task.id).where(
+                Task.container_id == container.id,
+                Task.status.in_([TaskStatus.pending, TaskStatus.dispatched]),
+            )
+        )
+        if active_task:
+            raise HTTPException(
+                status_code=409,
+                detail=f"本地实例 {instance.instance_id} 已有任务正在执行",
+            )
         try:
             validate_tag_change(container.image, target.canonical)
         except ValueError as exc:
@@ -553,12 +597,54 @@ def _start_image_release(
         local_images.append(container.image)
     if all(_same_image(image, target.canonical) for image in local_images):
         raise HTTPException(status_code=409, detail="全部本地实例已经使用目标镜像")
-    service.previous_image = service.desired_image or local_images[0]
+    source_image = parse_tagged_image(local_images[0]).canonical
+    release = ImageRelease(
+        service_id=service.id,
+        kind=kind,
+        source_image=source_image,
+        target_image=target.canonical,
+        status="running",
+        stage="preflighting_local",
+        requested_by=admin.id,
+        rollback_of_release_id=rollback_of_release_id,
+        started_at=now,
+        updated_at=now,
+    )
+    db.add(release)
+    db.flush()
+    for position, instance in enumerate(
+        sorted(local_instances, key=lambda item: item.instance_id), start=1
+    ):
+        db.add(
+            ImageReleaseStep(
+                release_id=release.id,
+                service_instance_id=instance.id,
+                container_id=instance.container_id,
+                position=position,
+            )
+        )
+    known_source = db.scalar(
+        select(ServiceImageVersion).where(
+            ServiceImageVersion.service_id == service.id,
+            ServiceImageVersion.image == source_image,
+        )
+    )
+    if not known_source:
+        db.add(
+            ServiceImageVersion(
+                service_id=service.id,
+                image=source_image,
+                activated_by=admin.id,
+                activated_at=now,
+            )
+        )
+    service.previous_image = source_image
     service.desired_image = target.canonical
-    service.release_status = "preparing_acs"
+    service.release_status = "preflighting_local"
     service.release_error = None
     service.release_requested_by = admin.id
     service.release_task_id = None
+    service.active_release_id = release.id
     service.release_acs_original_replicas = None
     service.release_started_at = now
     service.release_updated_at = now
@@ -625,7 +711,12 @@ def rollback_image_release(
     if not settings.autoscaling_enabled:
         raise HTTPException(status_code=409, detail="请先启用全局 ACS 连接开关")
     target = _start_image_release(
-        db, service, service.previous_image, user, datetime.now(UTC)
+        db,
+        service,
+        service.previous_image,
+        user,
+        datetime.now(UTC),
+        kind="rollback",
     )
     add_audit(
         db,
@@ -635,6 +726,144 @@ def rollback_image_release(
         target_name=service.name,
         user=user,
         detail=f"target_image={target}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return _service_out(db, service)
+
+
+def _version_out(version: ServiceImageVersion) -> dict:
+    return {
+        "id": version.id,
+        "service_id": version.service_id,
+        "image": version.image,
+        "release_id": version.release_id,
+        "activated_at": _iso(version.activated_at),
+    }
+
+
+def _release_out(db: Db, release: ImageRelease) -> dict:
+    steps = db.scalars(
+        select(ImageReleaseStep)
+        .where(ImageReleaseStep.release_id == release.id)
+        .order_by(ImageReleaseStep.position)
+    ).all()
+    return {
+        "id": release.id,
+        "service_id": release.service_id,
+        "kind": release.kind,
+        "source_image": release.source_image,
+        "target_image": release.target_image,
+        "status": release.status,
+        "stage": release.stage,
+        "protection_instance_id": release.protection_instance_id,
+        "error": release.error,
+        "started_at": _iso(release.started_at),
+        "completed_at": _iso(release.completed_at),
+        "created_at": _iso(release.created_at),
+        "updated_at": _iso(release.updated_at),
+        "steps": [
+            {
+                "id": step.id,
+                "service_instance_id": step.service_instance_id,
+                "container_id": step.container_id,
+                "position": step.position,
+                "status": step.status,
+                "stage": step.stage,
+                "task_id": step.task_id,
+                "compose_status": step.compose_status,
+                "error": step.error,
+                "started_at": _iso(step.started_at),
+                "completed_at": _iso(step.completed_at),
+            }
+            for step in steps
+        ],
+    }
+
+
+@router.get("/scaling/services/{service_id}/releases")
+def list_image_releases(
+    service_id: str,
+    db: Db,
+    user: CurrentUser,
+    limit: int = 20,
+) -> list[dict]:
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "view"
+    )
+    safe_limit = min(max(limit, 1), 100)
+    releases = db.scalars(
+        select(ImageRelease)
+        .where(ImageRelease.service_id == service.id)
+        .order_by(ImageRelease.created_at.desc())
+        .limit(safe_limit)
+    ).all()
+    return [_release_out(db, item) for item in releases]
+
+
+@router.get("/scaling/services/{service_id}/versions")
+def list_service_versions(
+    service_id: str,
+    db: Db,
+    user: CurrentUser,
+    limit: int = 10,
+) -> list[dict]:
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "view"
+    )
+    safe_limit = min(max(limit, 4), 50)
+    versions = db.scalars(
+        select(ServiceImageVersion)
+        .where(ServiceImageVersion.service_id == service.id)
+        .order_by(ServiceImageVersion.activated_at.desc())
+        .limit(safe_limit)
+    ).all()
+    return [_version_out(item) for item in versions]
+
+
+@router.post(
+    "/scaling/services/{service_id}/release/rollback/{version_id}",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def rollback_image_release_to_version(
+    service_id: str,
+    version_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    user: CurrentUser,
+) -> dict:
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, service_id), "manage"
+    )
+    version = db.scalar(
+        select(ServiceImageVersion).where(
+            ServiceImageVersion.id == version_id,
+            ServiceImageVersion.service_id == service.id,
+        )
+    )
+    if not version:
+        raise HTTPException(status_code=404, detail="回滚版本不存在")
+    if not settings.autoscaling_enabled:
+        raise HTTPException(status_code=409, detail="请先启用全局 ACS 连接开关")
+    target = _start_image_release(
+        db,
+        service,
+        version.image,
+        user,
+        datetime.now(UTC),
+        kind="rollback",
+        rollback_of_release_id=version.release_id,
+    )
+    add_audit(
+        db,
+        action="scaling.service.image.rollback",
+        target_type="scaling_service",
+        target_id=service.id,
+        target_name=service.name,
+        user=user,
+        detail=f"version_id={version.id}, target_image={target}",
         request=request,
         settings=settings,
     )
@@ -692,6 +921,113 @@ def update_instance_capacity(
         target_name=f"{service.name}/{instance.instance_id}",
         user=user,
         detail=f"capacity={payload.capacity_limit or 'default'}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return _instance_out(db, instance, service.capacity_per_replica)
+
+
+def _maintenance_event(
+    db: Db, service: ScalingService, instance: ServiceInstance, action: str, detail: str
+) -> None:
+    db.add(
+        ScalingEvent(
+            service_id=service.id,
+            action=action,
+            status="pending" if action == "maintenance_enter" else "success",
+            from_replicas=service.current_replicas,
+            to_replicas=service.desired_replicas,
+            average_businesses=service.average_businesses,
+            utilization_percent=service.utilization_percent,
+            detail=detail[:500],
+        )
+    )
+
+
+@router.post("/scaling/instances/{instance_id}/maintenance")
+def enter_instance_maintenance(
+    instance_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    user: CurrentUser,
+) -> dict:
+    instance = db.get(ServiceInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="服务实例不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, instance.service_id), "operate"
+    )
+    if instance.pool != "local":
+        raise HTTPException(status_code=409, detail="手动维护只适用于本地实例")
+    if service.release_status in ACTIVE_RELEASE_STATUSES:
+        raise HTTPException(status_code=409, detail="镜像发布进行中，不能手动进入维护")
+    if instance.desired_state in {"draining", "maintenance"}:
+        return _instance_out(db, instance, service.capacity_per_replica)
+    if instance.desired_state != "serve":
+        raise HTTPException(status_code=409, detail="实例当前状态不能进入维护")
+    now = datetime.now(UTC)
+    instance.desired_state = "draining"
+    instance.drain_requested_at = now
+    _maintenance_event(
+        db,
+        service,
+        instance,
+        "maintenance_enter",
+        f"本地实例 {instance.instance_id} 已从网关摘除，等待停止接单并排空",
+    )
+    add_audit(
+        db,
+        action="scaling.instance.maintenance.enter",
+        target_type="scaling_service",
+        target_id=service.id,
+        target_name=f"{service.name}/{instance.instance_id}",
+        user=user,
+        detail=f"active_businesses={instance.active_businesses}",
+        request=request,
+        settings=settings,
+    )
+    db.commit()
+    return _instance_out(db, instance, service.capacity_per_replica)
+
+
+@router.post("/scaling/instances/{instance_id}/maintenance/exit")
+def exit_instance_maintenance(
+    instance_id: str,
+    request: Request,
+    db: Db,
+    settings: Config,
+    user: CurrentUser,
+) -> dict:
+    instance = db.get(ServiceInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="服务实例不存在")
+    service = _require_service_permission(
+        db, user, db.get(ScalingService, instance.service_id), "operate"
+    )
+    if instance.pool != "local":
+        raise HTTPException(status_code=409, detail="手动维护只适用于本地实例")
+    if instance.desired_state == "serve":
+        return _instance_out(db, instance, service.capacity_per_replica)
+    if instance.desired_state != "maintenance":
+        raise HTTPException(status_code=409, detail="实例尚未排空，不能退出维护")
+    instance.desired_state = "restoring"
+    _maintenance_event(
+        db,
+        service,
+        instance,
+        "maintenance_exit",
+        f"本地实例 {instance.instance_id} 等待健康上报后恢复网关路由",
+    )
+    add_audit(
+        db,
+        action="scaling.instance.maintenance.exit",
+        target_type="scaling_service",
+        target_id=service.id,
+        target_name=f"{service.name}/{instance.instance_id}",
+        user=user,
+        detail="waiting_for_healthy_report",
         request=request,
         settings=settings,
     )

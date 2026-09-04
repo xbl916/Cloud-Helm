@@ -1,4 +1,5 @@
 import math
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -192,15 +193,121 @@ class AcsKubernetesClient:
                 status.get("currentRevision") == status.get("updateRevision")
             )
         rollout_ready = bool(
-            replicas > 0
-            and current.canonical == target.canonical
+            current.canonical == target.canonical
             and observed >= generation
-            and updated >= replicas
-            and ready >= replicas
-            and available >= replicas
-            and revisions_ready
+            and (
+                replicas == 0
+                or (
+                    updated >= replicas
+                    and ready >= replicas
+                    and available >= replicas
+                    and revisions_ready
+                )
+            )
         )
         return rollout_ready, current.canonical, replicas
+
+    @staticmethod
+    def release_guard_name(service: ScalingService, release_id: str) -> str:
+        suffix = f"-cloudhelm-release-{release_id[:8]}"
+        prefix = service.workload_name[: 253 - len(suffix)].rstrip("-")
+        return f"{prefix}{suffix}"
+
+    def _deployment_path(self, service: ScalingService, name: str = "") -> str:
+        namespace = quote(service.namespace, safe="")
+        suffix = f"/{quote(name, safe='')}" if name else ""
+        return f"/apis/apps/v1/namespaces/{namespace}/deployments{suffix}"
+
+    def ensure_release_guard(
+        self, service: ScalingService, release_id: str, image: str
+    ) -> str:
+        name = self.release_guard_name(service, release_id)
+        existing = self.client.get(self._deployment_path(service, name))
+        if existing.status_code == 200:
+            return name
+        if existing.status_code != 404:
+            existing.raise_for_status()
+
+        workload = self.get_workload(service)
+        template = deepcopy(workload.get("spec", {}).get("template") or {})
+        template_metadata = template.setdefault("metadata", {})
+        template_labels = dict(template_metadata.get("labels") or {})
+        template_annotations = dict(template_metadata.get("annotations") or {})
+        guard_labels = {
+            "cloudhelm.io/release-id": release_id,
+            "cloudhelm.io/instance-pool": "acs_release",
+        }
+        template_labels.update(guard_labels)
+        template_metadata.clear()
+        template_metadata["labels"] = template_labels
+        if template_annotations:
+            template_metadata["annotations"] = template_annotations
+        pod_spec = template.get("spec") or {}
+        template["spec"] = pod_spec
+        target = self._workload_container(service, {"spec": {"template": template}})
+        current_image = parse_tagged_image(str(target.get("image") or ""))
+        guard_image = parse_tagged_image(image)
+        if current_image.canonical_repository != guard_image.canonical_repository:
+            raise RuntimeError("升级保护实例与本地实例必须使用同一镜像仓库")
+        target["image"] = guard_image.canonical
+        env = [
+            item
+            for item in list(target.get("env") or [])
+            if item.get("name")
+            not in {"CLOUDHELM_INSTANCE_POOL", "CLOUDHELM_RELEASE_ID"}
+        ]
+        env.extend(
+            [
+                {"name": "CLOUDHELM_INSTANCE_POOL", "value": "acs_release"},
+                {"name": "CLOUDHELM_RELEASE_ID", "value": release_id},
+            ]
+        )
+        target["env"] = env
+        response = self.client.post(
+            self._deployment_path(service),
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": name, "labels": guard_labels},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"matchLabels": guard_labels},
+                    "strategy": {
+                        "type": "RollingUpdate",
+                        "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1},
+                    },
+                    "template": template,
+                },
+            },
+        )
+        response.raise_for_status()
+        return name
+
+    def release_guard_ready(
+        self, service: ScalingService, name: str, image: str
+    ) -> bool:
+        response = self.client.get(self._deployment_path(service, name))
+        response.raise_for_status()
+        workload = response.json()
+        container = self._workload_container(service, workload)
+        current = parse_tagged_image(str(container.get("image") or ""))
+        status = workload.get("status", {})
+        generation = int(workload.get("metadata", {}).get("generation") or 0)
+        return bool(
+            current.canonical == parse_tagged_image(image).canonical
+            and int(status.get("observedGeneration") or 0) >= generation
+            and int(status.get("updatedReplicas") or 0) >= 1
+            and int(status.get("readyReplicas") or 0) >= 1
+            and int(status.get("availableReplicas") or 0) >= 1
+        )
+
+    def delete_release_guard(self, service: ScalingService, name: str) -> None:
+        response = self.client.delete(
+            self._deployment_path(service, name),
+            params={"propagationPolicy": "Foreground"},
+        )
+        if response.status_code not in {200, 202, 404}:
+            response.raise_for_status()
 
     def close(self) -> None:
         self.client.close()
@@ -247,7 +354,11 @@ def _event(
 
 def _cancel_drains(instances: list[ServiceInstance]) -> None:
     for instance in instances:
-        if instance.pool == "acs" and instance.desired_state == "drain":
+        if instance.pool == "acs" and instance.desired_state in {
+            "drain",
+            "draining",
+            "maintenance",
+        }:
             instance.desired_state = "serve"
             instance.drain_requested_at = None
 
@@ -275,7 +386,8 @@ def evaluate_service(
     available = [
         item
         for item in fresh
-        if item.healthy
+        if item.pool != "acs_release"
+        and item.healthy
         and item.ready
         and item.accepting
         and _container_is_healthy(db, item)
@@ -331,7 +443,12 @@ def evaluate_service(
         alert_notifications.extend(service_alerts)
 
     local_instances = [item for item in instances if item.pool == "local"]
-    unavailable_local = [item for item in local_instances if item not in available]
+    unavailable_local = [
+        item
+        for item in local_instances
+        if item not in available
+        and item.desired_state not in {"draining", "maintenance", "restoring"}
+    ]
     local_failure = bool(unavailable_local)
     missing_local_capacity = sum(
         _instance_capacity(service, item) for item in unavailable_local
@@ -412,12 +529,14 @@ def evaluate_service(
                 if needs_failure_capacity
                 else "5 分钟平均负载达到扩容阈值"
             )
-            _event(db, service, "scale_up", "success", current, actual, reason)
+            event_action = "failover_scale_up" if local_failure else "load_scale_up"
+            _event(db, service, event_action, "success", current, actual, reason)
         except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as exc:
             service.status = "scale_failed"
             service.last_error = str(exc)[:500]
             if previous_status != service.status or previous_error != service.last_error:
-                _event(db, service, "scale_up", "failed", current, target, str(exc))
+                event_action = "failover_scale_up" if local_failure else "load_scale_up"
+                _event(db, service, event_action, "failed", current, target, str(exc))
         return
 
     if local_failure:
@@ -426,10 +545,16 @@ def evaluate_service(
         service.last_error = None
         return
     if service.release_status in {
+        "preflighting_local",
+        "preparing_guard",
+        "waiting_guard",
+        "draining_local",
         "preparing_acs",
         "waiting_acs",
+        "updating_acs",
         "updating_local",
         "verifying_local",
+        "cleaning_guard",
     }:
         _cancel_drains(instances)
         service.status = "release_protection"
@@ -459,7 +584,7 @@ def evaluate_service(
         (
             item
             for item in acs_fresh
-            if item.desired_state == "drain"
+            if item.desired_state in {"drain", "draining", "maintenance"}
             and not item.accepting
             and item.active_businesses == 0
         ),
@@ -471,13 +596,13 @@ def evaluate_service(
             service.status = "scale_down_waiting_for_reports"
             return
         candidate = min(serving, key=lambda item: (item.active_businesses, item.updated_at))
-        candidate.desired_state = "drain"
+        candidate.desired_state = "draining"
         candidate.drain_requested_at = now
         service.status = "draining"
         _event(
             db,
             service,
-            "drain_request",
+            "load_drain_request",
             "pending",
             current,
             current - 1,
@@ -495,7 +620,7 @@ def evaluate_service(
         _event(
             db,
             service,
-            "scale_down",
+            "load_scale_down",
             "success",
             current,
             actual,
@@ -507,7 +632,7 @@ def evaluate_service(
         drained.desired_state = "serve"
         drained.drain_requested_at = None
         if previous_status != service.status or previous_error != service.last_error:
-            _event(db, service, "scale_down", "failed", current, target, str(exc))
+            _event(db, service, "load_scale_down", "failed", current, target, str(exc))
 
 
 def evaluate_all_services(

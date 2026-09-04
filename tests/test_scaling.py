@@ -111,6 +111,81 @@ def test_business_service_report_and_instance_capacity(
     assert target_after_delete["instances"] == []
 
 
+def test_local_instance_manual_maintenance_waits_for_drain_and_healthy_restore(
+    client, admin_headers: dict[str, str]
+):
+    created = client.post(
+        "/api/v1/scaling/services",
+        headers=admin_headers,
+        json=_payload(f"VLM-maintenance-{uuid4()}"),
+    ).json()
+    report_headers = {"X-CloudHelm-Service-Token": created["report_token"]}
+    report_url = f"/api/v1/service-metrics/{created['id']}/report"
+    report = client.post(
+        report_url,
+        headers=report_headers,
+        json={
+            "instance_id": "local-maintenance-1",
+            "pool": "local",
+            "active_businesses": 2,
+            "healthy": True,
+            "ready": True,
+            "accepting": True,
+        },
+    )
+    assert report.status_code == 200
+    service = next(
+        item
+        for item in client.get("/api/v1/scaling/services").json()
+        if item["id"] == created["id"]
+    )
+    instance = service["instances"][0]
+
+    entered = client.post(
+        f"/api/v1/scaling/instances/{instance['id']}/maintenance",
+        headers=admin_headers,
+    )
+    assert entered.status_code == 200
+    assert entered.json()["desired_state"] == "draining"
+
+    drained = client.post(
+        report_url,
+        headers=report_headers,
+        json={
+            "instance_id": "local-maintenance-1",
+            "pool": "local",
+            "active_businesses": 0,
+            "healthy": True,
+            "ready": True,
+            "accepting": False,
+        },
+    )
+    assert drained.status_code == 200
+    assert drained.json()["desired_state"] == "maintenance"
+
+    exiting = client.post(
+        f"/api/v1/scaling/instances/{instance['id']}/maintenance/exit",
+        headers=admin_headers,
+    )
+    assert exiting.status_code == 200
+    assert exiting.json()["desired_state"] == "restoring"
+
+    restored = client.post(
+        report_url,
+        headers=report_headers,
+        json={
+            "instance_id": "local-maintenance-1",
+            "pool": "local",
+            "active_businesses": 0,
+            "healthy": True,
+            "ready": True,
+            "accepting": True,
+        },
+    )
+    assert restored.status_code == 200
+    assert restored.json()["desired_state"] == "serve"
+
+
 def test_ai_service_permissions_split_view_configure_and_release(
     client, admin_headers: dict[str, str], session_for
 ):
@@ -813,7 +888,7 @@ def test_local_failure_starts_acs_failover_without_waiting_for_window():
             .order_by(ScalingEvent.created_at.desc())
         )
         assert event is not None
-        assert event.action == "scale_up"
+        assert event.action == "failover_scale_up"
         assert "本地实例故障" in event.detail
 
 
@@ -873,7 +948,7 @@ def test_low_load_drains_only_acs_instance_before_scaling_down():
         evaluate_service(db, service, now, _enabled_settings(), provider)
         assert provider.scale_calls == []
         assert local.desired_state == "serve"
-        assert acs.desired_state == "drain"
+        assert acs.desired_state == "draining"
         assert service.status == "draining"
 
         acs.accepting = False

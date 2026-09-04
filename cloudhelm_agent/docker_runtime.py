@@ -1,17 +1,22 @@
 import os
 import time
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import docker
 from docker.errors import DockerException, NotFound
 
 from cloudhelm.image_reference import validate_tag_change
+from cloudhelm_agent.compose_manager import ComposeManager
 
 
 class DockerRuntime:
     def __init__(
-        self, max_containers: int = 500, disk_query_seconds: float = 300.0
+        self,
+        max_containers: int = 500,
+        disk_query_seconds: float = 300.0,
+        compose_roots: tuple[Path, ...] = (),
     ):
         self.client = docker.from_env()
         self.max_containers = max_containers
@@ -19,6 +24,7 @@ class DockerRuntime:
         self._disk_sizes: dict[str, tuple[int, int]] = {}
         self._disk_sizes_updated_at = float("-inf")
         self._stats_previous: dict[str, tuple[float, int, int, int, int]] = {}
+        self.compose_manager = ComposeManager(compose_roots)
 
     def ping(self) -> None:
         self.client.ping()
@@ -363,6 +369,7 @@ class DockerRuntime:
         expected_image: str,
         target_image: str,
         startup_health_seconds: int = 180,
+        require_compose_update: bool = False,
     ) -> dict[str, str]:
         container.reload()
         attrs = container.attrs
@@ -387,6 +394,13 @@ class DockerRuntime:
         create_config = self._replacement_config(
             attrs, target_ref.canonical, pulled_image.id
         )
+        labels = dict((attrs.get("Config") or {}).get("Labels") or {})
+        compose_update = None
+        if require_compose_update or labels.get("com.docker.compose.project"):
+            manager = getattr(self, "compose_manager", ComposeManager(()))
+            compose_update = manager.update_image(
+                labels, expected_ref.canonical, target_ref.canonical
+            )
         original_name = str(attrs.get("Name") or container.name).lstrip("/")
         backup_name = (
             f"{original_name[:180]}.cloudhelm-backup-"
@@ -438,6 +452,8 @@ class DockerRuntime:
                     container.start()
             except DockerException:
                 pass
+            if compose_update:
+                compose_update.rollback()
             raise
 
         cleanup_warning = ""
@@ -445,10 +461,43 @@ class DockerRuntime:
             container.remove(force=True, v=False)
         except DockerException as exc:
             cleanup_warning = f"; old stopped container retained as {backup_name}: {exc}"
+        compose_message = (
+            f"; Compose updated: {compose_update.path}"
+            if compose_update
+            else ""
+        )
         return {
-            "message": f"container image updated to {target_ref.canonical}{cleanup_warning}",
+            "message": f"container image updated to {target_ref.canonical}{compose_message}{cleanup_warning}",
             "docker_id": replacement.id,
         }
+
+    def _prepare_image(
+        self, container: Any, expected_image: str, target_image: str
+    ) -> str:
+        container.reload()
+        attrs = container.attrs
+        actual_image = str((attrs.get("Config") or {}).get("Image") or "")
+        try:
+            expected_ref, target_ref = validate_tag_change(
+                expected_image, target_image
+            )
+            actual_ref, _ = validate_tag_change(actual_image, target_image)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if actual_ref.canonical != expected_ref.canonical:
+            raise RuntimeError(
+                "container image changed after the task was queued; refresh and retry"
+            )
+        self.client.images.pull(target_ref.canonical)
+        labels = dict((attrs.get("Config") or {}).get("Labels") or {})
+        compose_path = None
+        if labels.get("com.docker.compose.project"):
+            manager = getattr(self, "compose_manager", ComposeManager(()))
+            compose_path = manager.validate_image(
+                labels, expected_ref.canonical, target_ref.canonical
+            )
+        suffix = f"; Compose validated: {compose_path}" if compose_path else ""
+        return f"image prepared: {target_ref.canonical}{suffix}"
 
     def execute(
         self, docker_id: str, action: str, arguments: dict[str, Any]
@@ -477,5 +526,12 @@ class DockerRuntime:
                 str(arguments.get("expected_image") or ""),
                 str(arguments.get("target_image") or ""),
                 int(arguments.get("startup_health_seconds") or 180),
+                bool(arguments.get("require_compose_update", False)),
+            )
+        if action == "prepare_image":
+            return self._prepare_image(
+                container,
+                str(arguments.get("expected_image") or ""),
+                str(arguments.get("target_image") or ""),
             )
         raise RuntimeError(f"unsupported action: {action}")

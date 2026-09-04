@@ -179,6 +179,10 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
             "0014_ai_service_alert_permissions",
             {"access_rules": {"service_id": "VARCHAR(36)"}},
         ),
+        (
+            "0015_durable_image_releases",
+            {"scaling_services": {"active_release_id": "VARCHAR(36)"}},
+        ),
     ]
 
 

@@ -258,7 +258,9 @@ class HeartbeatRequest(BaseModel):
 class AgentTask(BaseModel):
     id: str
     docker_id: str
-    action: Literal["start", "stop", "restart", "logs", "update_image"]
+    action: Literal[
+        "start", "stop", "restart", "logs", "prepare_image", "update_image"
+    ]
     arguments: dict[str, Any]
 
 
@@ -309,7 +311,7 @@ class TaskOut(BaseModel):
 class BusinessMetricReport(BaseModel):
     instance_id: str = Field(min_length=1, max_length=253)
     active_businesses: int = Field(ge=0, le=100000000)
-    pool: Literal["local", "acs"] = "local"
+    pool: Literal["local", "acs", "acs_release"] = "local"
     healthy: bool = True
     ready: bool = True
     accepting: bool = True

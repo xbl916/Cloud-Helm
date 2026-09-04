@@ -574,6 +574,8 @@ def create_action(
             "expected_image": container.image,
             "target_image": target_ref.canonical,
         }
+        if container.compose_project and container.compose_service:
+            arguments["require_compose_update"] = True
     else:
         permission = "logs" if payload.action == "logs" else "operate"
         if not can_access(user, rules, node, container, permission):

@@ -28,6 +28,8 @@ AUDIT_ACTION_LABELS = {
     "scaling.service.token.rotate": "轮换业务上报令牌",
     "scaling.instance.capacity.update": "修改服务实例容量",
     "scaling.instance.monitoring.update": "修改服务实例监控状态",
+    "scaling.instance.maintenance.enter": "服务实例进入维护",
+    "scaling.instance.maintenance.exit": "服务实例退出维护",
     "scaling.service.image.release": "分阶段发布模块镜像",
     "scaling.service.image.rollback": "回滚模块镜像",
     "user.create": "创建用户",
@@ -52,6 +54,7 @@ CONTAINER_ACTION_LABELS = {
     "restart": "重启容器",
     "logs": "查看容器日志",
     "update_image": "更换容器镜像 Tag",
+    "prepare_image": "准备容器镜像",
 }
 
 

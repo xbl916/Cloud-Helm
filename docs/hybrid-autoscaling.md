@@ -66,6 +66,12 @@ rules:
     resources: ["deployments", "statefulsets"]
     resourceNames: ["vlm-burst", "tts-burst", "asr-burst"]
     verbs: ["get", "patch"]
+  # 单本地实例升级时创建和删除临时旧版本保护 Deployment。Kubernetes
+  # 对 create 不能使用 resourceNames 限制，生产环境建议每组 AI 服务使用专用
+  # Namespace 和 ServiceAccount，将这条权限限制在该 Namespace 内。
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "get", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "patch"]
@@ -126,7 +132,7 @@ Content-Type: application/json
 |字段|含义|
 |---|---|
 |`instance_id`|由部署方注入的实例稳定标识，不需要向 Cloud Helm 查询。本地为每个容器设置固定且唯一的名称；ACS 使用 Pod 名，通常直接读取 `HOSTNAME`，以便安全缩容时标记目标 Pod。|
-|`pool`|本地实例传 `local`，ACS Pod 传 `acs`。|
+|`pool`|本地实例传 `local`，常规 ACS Pod 传 `acs`。升级保护 Pod 由平台注入 `acs_release`。|
 |`active_businesses`|当前正在承载的业务数。按服务实际语义定义，可以是活跃会话、正在推理的请求、正在合成/识别的任务数，但同一服务必须保持口径一致。|
 |`healthy`|模型、依赖和业务处理链路是否健康，不应只表示 HTTP 进程存活。|
 |`ready`|模型是否已加载完成并具备处理能力。ACS 冷启动期间传 `false`。|
@@ -228,10 +234,30 @@ env:
 }
 ```
 
-`desired_state` 有两个值：
+`desired_state` 的业务处理方式：
 
 - `serve`：正常接单；
-- `drain`：停止接收新业务，等待已有业务完成。不要退出进程，继续每 15 秒上报；只有 `accepting=false` 且 `active_businesses=0` 后平台才会缩 ACS 副本。
+- `draining`：立即停止接收新业务，等待已有业务完成；
+- `maintenance`：已经排空，保持进程存活但不要接单；
+- `restoring`：重新检查模型与依赖，准备好后上报 `healthy=true`、`ready=true`、`accepting=true`。
+
+不要在排空时退出上报循环。只有 `accepting=false` 且 `active_businesses=0` 后，
+平台才会切换本地容器或删除 ACS 实例。
+
+单本地实例升级时，Cloud Helm 会从常规 ACS 工作负载复制 Pod 模板，创建固定旧
+镜像的临时 Deployment，并覆盖注入：
+
+```yaml
+env:
+  - name: CLOUDHELM_INSTANCE_POOL
+    value: "acs_release"
+  - name: CLOUDHELM_RELEASE_ID
+    value: "发布单 UUID"
+```
+
+业务上报客户端必须读取这两个变量，把前者作为 `pool`，并把后者放入
+`metadata.release_id`。保护实例完成健康上报并注册网关地址之前，唯一的本地实例
+不会进入维护。高负载伸缩只计算 `pool=acs`，不会缩容或计入 `acs_release`。
 
 服务必须把 HTTP `401` 视为令牌配置错误并告警，不要无限快速重试；网络故障使用指数退避。指标只包含数量、健康状态和路由地址，不要上传请求内容、音频、图像或用户标识。
 
@@ -376,5 +402,7 @@ class CloudHelmReporter:
 7. 分别演练高负载扩容、本地故障兜底和 ACS 排空缩容，最后启用自动扩缩容。
 
 ACS 以 Kubernetes 为操作界面，Deployment/StatefulSet 的扩缩容通过标准 `scale` 子资源完成。阿里云也支持 HPA、KEDA、AHPA 等方案；本实现适合需要由现有 Cloud Helm 汇总本地与云上业务状态、并执行混合云故障切换的场景。
+
+需要从阿里云账号、网络、GPU、ACR、可选 NAS 开始完整搭建，并在统一网关尚未开发时验证扩容、服务发现、排空和缩容，可直接按照[阿里云 ACS 动态扩缩容完整验证手册](acs-dynamic-scaling-validation.md)执行。
 
 模块镜像升级与 Compose 版本漂移处理参见[模块镜像版本与分阶段发布](module-image-releases.md)。

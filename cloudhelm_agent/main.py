@@ -26,7 +26,9 @@ class Agent:
     def __init__(self, settings: AgentSettings):
         self.settings = settings
         self.runtime = DockerRuntime(
-            settings.max_containers, settings.disk_query_seconds
+            settings.max_containers,
+            settings.disk_query_seconds,
+            settings.compose_root_allowlist,
         )
         self.gpu_monitor = GpuMonitor(
             enabled=settings.gpu_monitoring_enabled,

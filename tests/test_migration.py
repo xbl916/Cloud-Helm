@@ -17,6 +17,9 @@ def test_fresh_schema_contains_wecom_sessions_without_passwords(tmp_path):
         "oauth_states",
         "metric_samples",
         "alert_rule_seeds",
+        "image_releases",
+        "image_release_steps",
+        "service_image_versions",
     }.issubset(inspector.get_table_names())
     node_columns = {item["name"] for item in inspector.get_columns("nodes")}
     assert {
@@ -157,7 +160,7 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
             connection.execute(
                 text("SELECT COUNT(*) FROM schema_migrations")
             ).scalar_one()
-            == 14
+            == 15
         )
         assert (
             connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"
@@ -194,6 +197,28 @@ def test_initialize_database_adds_module_release_columns(tmp_path):
         "release_started_at",
         "release_updated_at",
     }.issubset(columns)
+
+
+def test_initialize_database_adds_durable_release_column_and_tables(tmp_path):
+    database = tmp_path / "cloudhelm-before-durable-releases.db"
+    legacy_engine = create_engine(f"sqlite:///{database}")
+    with legacy_engine.begin() as connection:
+        connection.execute(
+            text("CREATE TABLE scaling_services (id VARCHAR(36) PRIMARY KEY)")
+        )
+
+    initialize_database(legacy_engine)
+
+    inspector = inspect(legacy_engine)
+    columns = {
+        item["name"] for item in inspector.get_columns("scaling_services")
+    }
+    assert "active_release_id" in columns
+    assert {
+        "image_releases",
+        "image_release_steps",
+        "service_image_versions",
+    }.issubset(inspector.get_table_names())
 
 
 def test_initialize_database_adds_pc_qr_auth_columns(tmp_path):

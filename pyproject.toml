@@ -1,6 +1,6 @@
 [project]
 name = "cloud-helm"
-version = "0.9.8"
+version = "0.9.9"
 description = "Cloud Helm - a lightweight multi-node Docker operations console"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,8 +16,13 @@ server = [
   "uvicorn>=0.35,<1",
 ]
 postgres = ["psycopg[binary]>=3.2,<4"]
-agent = ["docker>=7.1,<8"]
-test = ["pytest>=9.0.3,<10", "pytest-cov>=6.2,<8", "ruff>=0.16,<1"]
+agent = ["docker>=7.1,<8", "ruamel-yaml>=0.18,<1"]
+test = [
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=6.2,<8",
+  "ruff>=0.16,<1",
+  "ruamel-yaml>=0.18,<1",
+]
 
 [build-system]
 requires = ["setuptools>=80"]

@@ -443,6 +443,9 @@ class ScalingService(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     release_task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    active_release_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
     release_acs_original_replicas: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
@@ -474,6 +477,115 @@ class ScalingService(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ImageRelease(Base):
+    """A durable image release or rollback requested for one logical service."""
+
+    __tablename__ = "image_releases"
+    __table_args__ = (
+        Index("ix_image_releases_service_created", "service_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    service_id: Mapped[str] = mapped_column(
+        ForeignKey("scaling_services.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20), default="release", index=True)
+    source_image: Mapped[str] = mapped_column(String(512))
+    target_image: Mapped[str] = mapped_column(String(512))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    stage: Mapped[str] = mapped_column(String(40), default="preflight")
+    requested_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    rollback_of_release_id: Mapped[str | None] = mapped_column(
+        ForeignKey("image_releases.id", ondelete="SET NULL"), nullable=True
+    )
+    protection_instance_id: Mapped[str | None] = mapped_column(
+        String(253), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ImageReleaseStep(Base):
+    """Per-instance progress used by the serial local release state machine."""
+
+    __tablename__ = "image_release_steps"
+    __table_args__ = (
+        UniqueConstraint("release_id", "position", name="uq_release_step_position"),
+        Index("ix_release_steps_release_status", "release_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    release_id: Mapped[str] = mapped_column(
+        ForeignKey("image_releases.id", ondelete="CASCADE"), index=True
+    )
+    service_instance_id: Mapped[str | None] = mapped_column(
+        ForeignKey("service_instances.id", ondelete="SET NULL"), nullable=True
+    )
+    container_id: Mapped[str | None] = mapped_column(
+        ForeignKey("containers.id", ondelete="SET NULL"), nullable=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    stage: Mapped[str] = mapped_column(String(40), default="pending")
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    compose_status: Mapped[str] = mapped_column(String(20), default="pending")
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class ServiceImageVersion(Base):
+    """A successfully activated image that can be selected as a rollback target."""
+
+    __tablename__ = "service_image_versions"
+    __table_args__ = (
+        UniqueConstraint("service_id", "image", name="uq_service_image_version"),
+        Index("ix_service_versions_activated", "service_id", "activated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    service_id: Mapped[str] = mapped_column(
+        ForeignKey("scaling_services.id", ondelete="CASCADE"), index=True
+    )
+    image: Mapped[str] = mapped_column(String(512))
+    release_id: Mapped[str | None] = mapped_column(
+        ForeignKey("image_releases.id", ondelete="SET NULL"), nullable=True
+    )
+    activated_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    compose_manifest_json: Mapped[str] = mapped_column(Text, default="{}")
+    activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow
     )
 
 

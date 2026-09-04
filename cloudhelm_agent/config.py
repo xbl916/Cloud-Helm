@@ -30,6 +30,7 @@ class AgentSettings(BaseSettings):
     nvidia_smi_path: Path = Path("/usr/bin/nvidia-smi")
     gpu_query_timeout_seconds: float = Field(default=5.0, ge=1, le=30)
     gpu_max_output_bytes: int = Field(default=4194304, ge=65536, le=16777216)
+    compose_roots: str = Field(default="", max_length=8192)
 
     @property
     def api_url(self) -> str:
@@ -42,5 +43,15 @@ class AgentSettings(BaseSettings):
                 name.strip()
                 for name in self.network_interfaces.split(",")
                 if name.strip()
+            )
+        )
+
+    @property
+    def compose_root_allowlist(self) -> tuple[Path, ...]:
+        return tuple(
+            dict.fromkeys(
+                Path(value.strip()).resolve()
+                for value in self.compose_roots.split(",")
+                if value.strip()
             )
         )
