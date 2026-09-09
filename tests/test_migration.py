@@ -137,6 +137,8 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
                 )
         connection.execute(text('ALTER TABLE "access_rules" DROP COLUMN "can_manage"'))
 
+    with old_engine.begin() as connection:
+        connection.execute(text("DROP TABLE wecom_event_receipts"))
     initialize_database(old_engine)
     initialize_database(old_engine)
 
@@ -155,12 +157,13 @@ def test_initialize_database_upgrades_052_sqlite_in_place(tmp_path):
     assert "access_version" in user_columns
     assert "alert_notifications" in user_columns
     assert "schema_migrations" in inspector.get_table_names()
+    assert "wecom_event_receipts" in inspector.get_table_names()
     with old_engine.connect() as connection:
         assert (
             connection.execute(
                 text("SELECT COUNT(*) FROM schema_migrations")
             ).scalar_one()
-            == 15
+            == 16
         )
         assert (
             connection.execute(text("SELECT name FROM nodes")).scalar_one() == "原节点"

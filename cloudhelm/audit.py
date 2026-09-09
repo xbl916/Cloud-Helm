@@ -25,6 +25,8 @@ AUDIT_ACTION_LABELS = {
     "alert.notification.test": "发送模拟告警",
     "scaling.service.create": "创建混合云伸缩服务",
     "scaling.service.update": "修改混合云伸缩策略",
+    "agent.token.rotate": "重置节点凭据",
+    "wecom.directory.disable": "企微通讯录变更停用账号",
     "scaling.service.token.rotate": "轮换业务上报令牌",
     "scaling.instance.capacity.update": "修改服务实例容量",
     "scaling.instance.monitoring.update": "修改服务实例监控状态",

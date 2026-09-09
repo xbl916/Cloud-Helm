@@ -53,6 +53,7 @@ from cloudhelm.schemas import (
     UserCreate,
     UserUpdate,
 )
+from cloudhelm.security import hash_secret, new_opaque_token
 
 router = APIRouter(tags=["console"])
 
@@ -300,6 +301,24 @@ def list_containers(node_id: str, db: Db, user: CurrentUser) -> list[dict]:
         }
         for item in visible
     ]
+
+
+@router.post("/nodes/{node_id}/agent-token/rotate")
+def rotate_node_token(
+    node_id: str, request: Request, db: Db, settings: Config, admin: Admin,
+) -> dict:
+    node = db.get(Node, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    token = new_opaque_token()
+    node.agent_token_hash = hash_secret(token)
+    add_audit(
+        db, action="agent.token.rotate", target_type="node", target_id=node.id,
+        target_name=node.name, user=admin, request=request, settings=settings,
+        detail="管理员重置节点凭据，旧凭据立即失效",
+    )
+    db.commit()
+    return {"node_id": node.id, "agent_key": node.agent_key, "node_token": token}
 
 
 @router.put("/nodes/{node_id}/gateway-address")

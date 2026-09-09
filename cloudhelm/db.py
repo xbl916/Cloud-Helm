@@ -183,6 +183,7 @@ def _migration_definitions(target_engine: Engine) -> list[tuple[str, dict]]:
             "0015_durable_image_releases",
             {"scaling_services": {"active_release_id": "VARCHAR(36)"}},
         ),
+        ("0016_wecom_event_receipts", {}),
     ]
 
 

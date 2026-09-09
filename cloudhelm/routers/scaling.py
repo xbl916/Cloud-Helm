@@ -24,6 +24,7 @@ from cloudhelm.models import (
     Task,
     TaskStatus,
     User,
+    UserRole,
 )
 from cloudhelm.releases import ACTIVE_RELEASE_STATUSES, resolve_local_container
 from cloudhelm.schemas import (
@@ -245,6 +246,13 @@ def report_business_load(
             ServiceInstance.instance_id == payload.instance_id,
         )
     )
+    if payload.container_id and (
+        not instance or instance.container_id != payload.container_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="业务上报不能建立或修改容器关联，请先通过 Agent 标签绑定",
+        )
     if not instance:
         instance = ServiceInstance(
             service_id=service.id,
@@ -508,6 +516,13 @@ def update_scaling_service(
     )
     if duplicate:
         raise HTTPException(status_code=409, detail="服务名称已存在")
+    binding_fields = (
+        "provider", "namespace", "workload_kind", "workload_name", "acs_container_name"
+    )
+    if user.role != UserRole.admin and any(
+        getattr(service, field) != getattr(payload, field) for field in binding_fields
+    ):
+        raise HTTPException(status_code=403, detail="修改 Kubernetes 工作负载绑定需要管理员权限")
     _apply_service_input(service, payload)
     add_audit(
         db,

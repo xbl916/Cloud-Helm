@@ -76,10 +76,13 @@ jobs:
         run: |
           archive="release/cloudhelm-$VERSION.tar.gz"
           checksum="$archive.sha256"
+          guide="docs/deploy-and-upgrade-$VERSION.md"
+          security_guide="docs/security-hardening.md"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$archive" "$checksum" --clobber
+            gh release upload "$RELEASE_TAG" "$archive" "$checksum" "$guide" "$security_guide" --clobber
+            gh release edit "$RELEASE_TAG" --title "Cloud Helm $VERSION" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$RELEASE_TAG" "$archive" "$checksum" \
+            gh release create "$RELEASE_TAG" "$archive" "$checksum" "$guide" "$security_guide" \
               --verify-tag \
               --title "Cloud Helm $VERSION" \
               --notes-file RELEASE_NOTES.md

@@ -18,7 +18,7 @@ def test_compose_uses_main_container_initialization(relative_path, service):
     compose = (ROOT / relative_path).read_text(encoding="utf-8")
     assert "\n  data-init:" not in compose
     assert "condition: service_completed_successfully" not in compose
-    assert f"cloud-helm-{service}:0.9.9" in compose
+    assert f"cloud-helm-{service}:1.0.0" in compose
     assert "- CHOWN" in compose
     assert "- FOWNER" in compose
     assert "- DAC_OVERRIDE" in compose
@@ -88,7 +88,7 @@ def test_container_logs_are_rendered_in_the_viewing_device_timezone():
         encoding="utf-8"
     )
 
-    assert "app.js?v=0.9.9" in page
+    assert "app.js?v=1.0.0" in page
     assert "formatLogsForDevice(result.result)" in script
     assert "getTimezoneOffset()" in script
     assert "formatDeviceTime(c.finished_at)" in script

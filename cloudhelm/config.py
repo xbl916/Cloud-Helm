@@ -1,3 +1,5 @@
+import base64
+import binascii
 import ipaddress
 import os
 from functools import lru_cache
@@ -28,6 +30,8 @@ class Settings(BaseSettings):
     wecom_miniprogram_secret: str | None = Field(
         default=None, min_length=8, max_length=512
     )
+    wecom_callback_token: str | None = Field(default=None, min_length=16, max_length=256)
+    wecom_callback_aes_key: str | None = Field(default=None, min_length=43, max_length=43)
     bootstrap_admin_wecom_userid: str = Field(min_length=1, max_length=128)
     bootstrap_admin_display_name: str = Field(default="系统管理员", max_length=120)
     session_minutes: int = Field(default=60, ge=5, le=1440)
@@ -69,6 +73,7 @@ class Settings(BaseSettings):
         "wecom_secret",
         "wecom_miniprogram_secret",
         "gateway_discovery_token",
+        "wecom_callback_token",
     )
     @classmethod
     def reject_example_secrets(cls, value: str | None) -> str | None:
@@ -102,6 +107,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_public_url(self) -> "Settings":
+        if bool(self.wecom_callback_token) != bool(self.wecom_callback_aes_key):
+            raise ValueError("wecom callback token and AES key must be configured together")
+        if self.wecom_callback_aes_key:
+            try:
+                key = base64.b64decode(self.wecom_callback_aes_key + "=", validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("invalid wecom callback AES key") from exc
+            if len(key) != 32:
+                raise ValueError("invalid wecom callback AES key")
         parsed = urlsplit(self.public_base_url)
         if not parsed.hostname or parsed.path or parsed.query or parsed.fragment:
             raise ValueError("public_base_url must contain only scheme and host")
@@ -113,9 +127,17 @@ class Settings(BaseSettings):
             raise ValueError("public_base_url must use HTTP or HTTPS")
         for name, url in {
             "wecom_qr_authorize_url": self.wecom_qr_authorize_url,
+            "wecom_api_base": self.wecom_api_base,
         }.items():
             candidate = urlsplit(url)
-            if not candidate.hostname or candidate.scheme not in {"http", "https"}:
+            if (
+                not candidate.hostname
+                or candidate.scheme not in {"http", "https"}
+                or candidate.username
+                or candidate.password
+                or candidate.query
+                or candidate.fragment
+            ):
                 raise ValueError(f"{name} must be an absolute HTTP(S) URL")
             if self.environment == "production" and candidate.scheme != "https":
                 raise ValueError(f"{name} must use HTTPS in production")

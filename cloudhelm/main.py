@@ -23,7 +23,7 @@ from cloudhelm.db import SessionLocal, initialize_database
 from cloudhelm.dependencies import CSRF_COOKIE, SESSION_COOKIE
 from cloudhelm.models import User, UserRole, WebSession
 from cloudhelm.releases import progress_image_releases
-from cloudhelm.routers import agent, api, auth, scaling
+from cloudhelm.routers import agent, api, auth, scaling, wecom_events
 from cloudhelm.security import digest_token
 
 settings = get_settings()
@@ -109,6 +109,7 @@ app.add_middleware(
     allowed_hosts=[settings.public_host, "127.0.0.1", "localhost"],
 )
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(wecom_events.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(api.router, prefix="/api/v1")
 app.include_router(scaling.router, prefix="/api/v1")
@@ -121,7 +122,9 @@ async def security_headers(request: Request, call_next):
         and request.url.path.startswith("/api/v1/")
         and not request.url.path.startswith("/api/v1/agent/")
         and not request.url.path.startswith("/api/v1/service-metrics/")
-        and request.url.path != "/api/v1/auth/wecom-mini/login"
+        and request.url.path not in {
+            "/api/v1/auth/wecom-mini/login", "/api/v1/auth/wecom/events"
+        }
         and not request.headers.get("authorization", "").lower().startswith("bearer ")
     ):
         origin = request.headers.get("origin")

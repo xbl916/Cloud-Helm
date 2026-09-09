@@ -103,22 +103,20 @@ def enroll(payload: EnrollRequest, db: Db, settings: Config) -> EnrollResponse:
     node = db.scalar(select(Node).where(Node.agent_key == payload.agent_key))
     node_token = secrets.token_urlsafe(40)
     if node:
-        node.name = payload.name
-        node.hostname = payload.hostname
-        node.environment = payload.environment
-        node.agent_version = payload.agent_version
-        node.agent_token_hash = hash_secret(node_token)
-    else:
-        node = Node(
-            agent_key=payload.agent_key,
-            name=payload.name,
-            hostname=payload.hostname,
-            environment=payload.environment,
-            agent_version=payload.agent_version,
-            agent_token_hash=hash_secret(node_token),
+        raise HTTPException(
+            status_code=409,
+            detail="节点已注册，请保留原 Agent 状态文件或由管理员恢复凭据",
         )
-        db.add(node)
-        db.flush()
+    node = Node(
+        agent_key=payload.agent_key,
+        name=payload.name,
+        hostname=payload.hostname,
+        environment=payload.environment,
+        agent_version=payload.agent_version,
+        agent_token_hash=hash_secret(node_token),
+    )
+    db.add(node)
+    db.flush()
     add_audit(
         db,
         action="agent.enroll",
