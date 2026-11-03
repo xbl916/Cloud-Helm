@@ -2,13 +2,14 @@
 
 云舵是面向企业微信 H5、PC 企业微信扫码和企业自用小程序的多节点 Docker 运维控制台。管理中心集中处理企微身份、资源权限和审计；每台 Docker 主机运行主动出站连接的 Agent，因此节点不需要公网 IP，也不需要暴露 Docker API。
 
-当前版本为 `1.0.0`。本版修复容器关联、Kubernetes 目标及节点注册权限边界，新增企微通讯录变更撤权回调与管理员节点凭据恢复。镜像发布支持升级前预拉取与 Compose 校验、单实例 ACS 发布保障、多个本地实例逐台排空升级、持久化发布进度和最近至少三个版本回滚；手动维护状态可用于安全修改服务器上的 Compose 配置。
+当前版本为 `1.0.1`。本版取消历史行数的 2000 万配置上限，支持只按时间保留历史，并将清理移至后台按索引分批执行。延续容器关联、Kubernetes 目标及节点注册权限保护、企微通讯录变更撤权回调与管理员节点凭据恢复。镜像发布支持升级前预拉取与 Compose 校验、单实例 ACS 发布保障、多个本地实例逐台排空升级、持久化发布进度和最近至少三个版本回滚；手动维护状态可用于安全修改服务器上的 Compose 配置。
 
 快速导航：
 
 - [安全模型](#安全模型)
 - [详细部署手册](#详细部署手册)
-- [1.0.0 全新部署与旧版本升级](docs/deploy-and-upgrade-1.0.0.md)
+- [1.0.1 全新部署与旧版本升级](docs/deploy-and-upgrade-1.0.1.md)
+- [1.0.1 PostgreSQL 正式部署与 ACS 弹性逐步操作手册](docs/fresh-deploy-postgresql-aliyun-1.0.1.md)
 - [NVIDIA GPU 监控](#nvidia-gpu-监控)
 - [监控告警与企业微信通知](#监控告警与企业微信通知)
 - [本地常驻与阿里云 ACS 弹性](docs/hybrid-autoscaling.md)
@@ -98,15 +99,15 @@ docker compose version
 把 `.tar.gz` 和 `.sha256` 放在同一目录，先验证文件未损坏或被替换：
 
 ```bash
-sha256sum -c cloudhelm-1.0.0.tar.gz.sha256
-tar -xzf cloudhelm-1.0.0.tar.gz
-cd cloudhelm-1.0.0
+sha256sum -c cloudhelm-1.0.1.tar.gz.sha256
+tar -xzf cloudhelm-1.0.1.tar.gz
+cd cloudhelm-1.0.1
 ```
 
 预期输出包含：
 
 ```text
-cloudhelm-1.0.0.tar.gz: OK
+cloudhelm-1.0.1.tar.gz: OK
 ```
 
 如果校验失败，不要继续部署，应重新获取发布包。
@@ -228,7 +229,7 @@ CLOUDHELM_PORT=8080
 |`CLOUDHELM_METRICS_HISTORY_ENABLED`|是否保存节点、节点业务负载和容器趋势历史|默认 `true`；关闭后仍保留当前值监控|
 |`CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS`|历史采样间隔|默认 300 秒，可设 60–3600；心跳仍按 Agent 上报间隔更新当前值|
 |`CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS`|历史保留时间|默认 168 小时（7 天），可设 1–8760；PostgreSQL 可按容量提高到半年或一年|
-|`CLOUDHELM_METRICS_HISTORY_MAX_ROWS`|所有节点和容器合计的历史行数硬上限|默认 200000，可设 1000–20000000；达到后优先保留最新数据|
+|`CLOUDHELM_METRICS_HISTORY_MAX_ROWS`|所有节点和容器合计的可选历史行数上限|默认 200000，无配置最大值；设为 `0` 关闭行数限制，只按时间保留；非零时后台优先清理旧数据|
 |`CLOUDHELM_ALERTS_ENABLED`|是否评估节点、容器与 AI 服务告警规则|默认 `true`；关闭后不产生新事件，但保留已有规则和历史事件|
 |`CLOUDHELM_ALERT_EVENT_RETENTION_HOURS`|告警事件保留时间|默认 2160 小时（90 天），可设 24–17520（两年）|
 |`CLOUDHELM_ALERT_EVENT_MAX_ROWS`|告警事件总行数硬上限|默认 10000，可设 100–1000000；每小时清理过期及超限事件|
@@ -360,7 +361,7 @@ curl -i https://ops.company.com/api/v1/nodes
 在节点上校验并解压发布包，然后执行：
 
 ```bash
-cd cloudhelm-1.0.0/deploy
+cd cloudhelm-1.0.1/deploy
 cp agent.env.example agent.env
 chmod 600 agent.env
 install -d -m 0700 cloudhelm-data
@@ -467,17 +468,19 @@ docker compose -f agent.compose.yml logs --tail=100 agent
 
 容器磁盘数据来自 Docker `system df`：分别显示“可写层”和“镜像 + 可写层”，默认每 300 秒刷新。Docker volume、bind mount 和 tmpfs 属于容器外部存储，不计入容器可写层；它们所在文件系统的容量应通过节点磁盘或独立存储监控检查。
 
-Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样。节点采样汇总该节点已关联 AI 实例的业务数、健康接单容量和实例数，容器采样只汇总关联到该容器的实例；节点详情和容器详情均显示最近 24 小时业务负载曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON，并同时执行两个容量边界：删除 7 天前的数据，且全库最多保留最新 200000 行。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过硬上限，实际可查看时长会自动缩短。
+Server 默认每 300 秒为每个节点及其当时上报的容器保存一条趋势采样。节点采样汇总该节点已关联 AI 实例的业务数、健康接单容量和实例数，容器采样只汇总关联到该容器的实例；节点详情和容器详情均显示最近 24 小时业务负载曲线。历史表只保存内部 ID、时间和数值，不保存容器名、镜像名或心跳原始 JSON。默认保留 7 天，并启用全库最新 200000 行的可选上限。估算每日行数可用 `（节点数 + 当时上报的容器数）× 288`；如果 7 天数据超过配置的行数上限，实际可查看时长会缩短。
 
-PostgreSQL 可以通过 Server 的 `.env` 提高保留量。例如 1 个节点、50 个容器按 5 分钟采样保留约半年，需要约 264 万行，可预留为：
+PostgreSQL 可以通过 Server 的 `.env` 提高保留量。例如按 5 分钟采样保留约半年（180 天），关闭行数限制以免提前删除：
 
 ```dotenv
 CLOUDHELM_METRICS_HISTORY_INTERVAL_SECONDS=300
 CLOUDHELM_METRICS_HISTORY_RETENTION_HOURS=4320
-CLOUDHELM_METRICS_HISTORY_MAX_ROWS=3500000
+CLOUDHELM_METRICS_HISTORY_MAX_ROWS=0
 ```
 
-配置允许最长 8760 小时（365 天）、最多 20000000 行，但实际值应根据节点和容器数量、数据库磁盘容量、备份窗口及查询性能确定。更改后重新创建 Server 生效，不需要修改表结构。
+配置允许最长 8760 小时（365 天），行数不再设 2000 万的配置上限；也可以设置任意正整数以保留行数保护。实际值应根据节点和容器数量、数据库磁盘容量、备份窗口及查询性能确定。更改后重新创建 Server 生效，不需要修改表结构。
+
+历史清理由独立后台任务在启动后及每 5 分钟执行，关闭采样或全部节点离线时仍会清理。清理使用已有时间索引选出过期记录，每批最多 1000 行并单独提交，每轮最多 20 批；积压时暂停 1 秒继续。心跳只写入采样，不再执行历史清理或大 `OFFSET` 查询，因此时间和行数边界允许在后台处理前短暂超出。`MAX_ROWS=0` 时不统计全表；启用行数保护时每轮在过期清理完成后统计一次，再按主键分批删旧。PostgreSQL 使用连接级 advisory lock 防止多个 Server worker 同时清理，失败会记录日志并在后续轮次重试。
 
 SQLite 文件的实际字节数受页大小和索引影响，不能仅由行数精确换算。历史删除后空闲页会被后续采样复用，因此数据库不会因已过期数据持续无界增长，但文件不会立刻缩小。Server 不在心跳路径自动执行 `VACUUM`，以免长时间独占数据库；确需缩小文件时，应先备份并在维护窗口停止 Server 后手工执行。容器日志仍受每容器约 150 MB 的 Docker 日志轮转限制，它和 SQLite 历史容量是两套独立边界。
 
@@ -830,20 +833,20 @@ module.exports = {
 - 定期复核企微应用可见范围、云舵人员列表和容器授权；
 - 至少每月验证一次备份可恢复，而不只是确认“备份文件存在”。
 
-## 从旧版本原地升级到 1.0.0
+## 从旧版本原地升级到 1.0.1
 
 系统在 0.8.1 基础上创建混合云业务负载、实例、历史采样、伸缩事件、镜像发布单、发布步骤和版本历史表，增加模块期望镜像、企微 PC 扫码来源、服务发现端点、节点网关访问 IP、节点业务历史和 AI 服务授权字段，写入 `0008_hybrid_cloud_autoscaling` 至 `0015_durable_image_releases` 迁移记录。迁移不会重建已有表，也不会修改已有用户、节点、容器、历史指标或审计记录。
 
-SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [1.0.0 全新部署与旧版本升级手册](docs/deploy-and-upgrade-1.0.0.md)。
+SQLite 始终在启动时运行 `PRAGMA integrity_check`。检测到待执行迁移时，会在变更前通过 SQLite backup API 创建一致性备份并在完成后再次检查。自动伸缩和模块发布默认都不会自行启动；完成 ACS 接入后再按文档显式操作。完整命令、SQLite/PostgreSQL 备份方式、Agent 逐节点升级和回退步骤见 [1.0.1 全新部署与旧版本升级手册](docs/deploy-and-upgrade-1.0.1.md)。
 
 先在 `0.8.1` 部署目录停止 Server 并制作一致性备份：
 
 ```bash
 cd /实际路径/cloudhelm-0.8.1
 docker compose stop server
-sudo tar -czf ../cloudhelm-before-1.0.0.tar.gz -C cloudhelm-data .
-chmod 600 ../cloudhelm-before-1.0.0.tar.gz
-test -s ../cloudhelm-before-1.0.0.tar.gz
+sudo tar -czf ../cloudhelm-before-1.0.1.tar.gz -C cloudhelm-data .
+chmod 600 ../cloudhelm-before-1.0.1.tar.gz
+test -s ../cloudhelm-before-1.0.1.tar.gz
 ```
 
 解压新版发布包后，把其中的 `docker-compose.yml` 复制到现有部署目录。保留现有 `.env` 和 `cloudhelm-data`，不要用示例文件覆盖它们：
@@ -858,7 +861,7 @@ curl --fail https://ops.company.com/healthz
 
 日志中会记录备份路径和首次执行的迁移版本。再次重启不会重复迁移或重复生成同版本备份。随后确认企微登录、用户列表和既有容器授权仍然正常。
 
-业务负载由各 AI 服务直接上报。使用 Compose 同步、容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 1.0.0，以便预拉取镜像、校验并原子更新 Compose、等待 Docker 健康检查，并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
+业务负载由各 AI 服务直接上报。使用 Compose 同步、容器标签自动关联或分阶段镜像发布时必须把 Agent 逐节点升级到 1.0.1，以便预拉取镜像、校验并原子更新 Compose、等待 Docker 健康检查，并在启动失败时恢复旧容器；升级 Agent 不需要重新注册、删除状态目录或改动 GPU overlay，也不会停止节点上的业务容器。
 
 每台 Agent 节点复制新版 `deploy/agent.compose.yml`；GPU 节点继续叠加原有 `deploy/agent.gpu.compose.yml`。保留原来的 `agent.env` 与 `deploy/cloudhelm-data`，这样节点会继续使用已有独立凭据，无需重新注册：
 
@@ -976,7 +979,7 @@ chmod 600 cloudhelm-postgres.dump
 uv sync --extra test --extra server --extra agent --extra postgres
 uv run ruff check .
 uv run pytest
-bash scripts/package-release.sh 1.0.0
+bash scripts/package-release.sh 1.0.1
 ```
 
 发布包不包含 `.env`、数据库、Agent 状态或任何部署密钥。
@@ -984,14 +987,14 @@ bash scripts/package-release.sh 1.0.0
 `main` 分支 CI 成功后，`.github/workflows/tag-release.yml` 会按项目版本创建尚不存在的 Git tag；现有标签绝不会被移动或覆盖。新标签随后自动创建 GitHub Release，并发布两个 OCI 多架构镜像。也可以手动推送与项目版本一致的标签：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
-- `ghcr.io/xbl916/cloud-helm-server:1.0.0`
-- `ghcr.io/xbl916/cloud-helm-agent:1.0.0`
+- `ghcr.io/xbl916/cloud-helm-server:1.0.1`
+- `ghcr.io/xbl916/cloud-helm-agent:1.0.1`
 
-Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v1.0.0` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
+Server 镜像包含 `linux/amd64`、`linux/arm64`；Agent 镜像包含 `linux/amd64`、`linux/arm/v7`、`linux/arm64`。两者都额外发布 `v1.0.1` 和 `latest` 标签、SBOM 与构建来源证明。GitHub Actions 使用 `packages: write` 的仓库临时令牌，不需要保存长期 GHCR 密钥；第三方 Actions 均固定到完整提交 SHA。自动发布方式参考 [GitHub 容器镜像发布文档](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)和 [Docker 多平台构建文档](https://docs.docker.com/build/ci/github-actions/multi-platform/)。
 
 
 ## 安全加固更新

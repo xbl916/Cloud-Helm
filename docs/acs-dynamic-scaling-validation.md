@@ -1,5 +1,7 @@
 # 阿里云 ACS 动态扩缩容完整验证手册
 
+当前 1.0.1 正式部署请使用 [PostgreSQL 与 ACS 完整操作手册](fresh-deploy-postgresql-aliyun-1.0.1.md#6-阿里云-acs-从零部署与真实弹性验收)。本文保留 0.9.7 验证记录；其中 `drain` 状态、默认 Compose 命令和绑定说明不应直接用于当前部署，当前协议使用 `draining` / `maintenance`，PostgreSQL 使用专用 Compose。
+
 本文适用于 Cloud Helm `0.9.7`，目标是在统一业务网关尚未开发完成时，独立验证以下链路：
 
 1. Cloud Helm 根据本地业务负载把阿里云 ACS 工作负载从 `0` 扩到 `1`；
@@ -212,7 +214,7 @@ GPU 型号和可用区库存会变化，不要直接照抄本文的 `A10`。以�
 阿里云 ACS VPC：        10.20.0.0/16
 ACS vSwitch A：         10.20.10.0/24
 ACS vSwitch B：         10.20.11.0/24
-Kubernetes Service CIDR：172.21.0.0/20
+Kubernetes Service CIDR：172.21.0.1/20
 ```
 
 要求：

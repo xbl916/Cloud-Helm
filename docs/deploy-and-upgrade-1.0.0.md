@@ -117,6 +117,8 @@ docker compose -f agent.compose.yml -f agent.gpu.compose.yml logs --tail=100 age
 
 ### 4. 可选：PostgreSQL
 
+全新使用 PostgreSQL 时，建议直接按照 [PostgreSQL + 阿里云完整部署手册](fresh-deploy-postgresql-aliyun-1.0.1.md) 操作，包含节点规模、历史保留、容量估算、OSS 备份与恢复演练。
+
 需要 PostgreSQL 时，应在首次启动 Server 前选择该方式；不要先初始化 SQLite 后直接改数据库地址并以为空间中的账号和节点会自动迁移。
 
 ```bash

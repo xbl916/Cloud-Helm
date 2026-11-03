@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import secrets
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
@@ -21,12 +22,14 @@ from cloudhelm.autoscaling import evaluate_all_services
 from cloudhelm.config import get_settings
 from cloudhelm.db import SessionLocal, initialize_database
 from cloudhelm.dependencies import CSRF_COOKIE, SESSION_COOKIE
+from cloudhelm.metrics import cleanup_metric_history
 from cloudhelm.models import User, UserRole, WebSession
 from cloudhelm.releases import progress_image_releases
 from cloudhelm.routers import agent, api, auth, scaling, wecom_events
 from cloudhelm.security import digest_token
 
 settings = get_settings()
+logger = logging.getLogger("cloudhelm.maintenance")
 
 
 def bootstrap_admin() -> None:
@@ -78,6 +81,23 @@ async def autoscaling_monitor() -> None:
             await send_alert_notification(event_id, settings)
 
 
+async def metric_history_monitor(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        delay = 300
+        try:
+            backlog = await asyncio.to_thread(
+                cleanup_metric_history, settings, datetime.now(UTC)
+            )
+            if backlog:
+                delay = 1
+        except Exception:
+            logger.exception("Metric history cleanup failed; will retry")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_database()
@@ -86,15 +106,20 @@ async def lifespan(_: FastAPI):
         seed_default_alert_rules(db, settings)
     alert_task = asyncio.create_task(alert_monitor())
     scaling_task = asyncio.create_task(autoscaling_monitor())
+    history_stop = asyncio.Event()
+    history_task = asyncio.create_task(metric_history_monitor(history_stop))
     try:
         yield
     finally:
+        history_stop.set()
         alert_task.cancel()
         scaling_task.cancel()
         with suppress(asyncio.CancelledError):
             await alert_task
         with suppress(asyncio.CancelledError):
             await scaling_task
+        # Let the bounded cleanup finish before releasing its DB connection.
+        await history_task
 
 
 app = FastAPI(

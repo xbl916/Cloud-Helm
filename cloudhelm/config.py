@@ -51,7 +51,8 @@ class Settings(BaseSettings):
     metrics_history_enabled: bool = True
     metrics_history_interval_seconds: int = Field(default=300, ge=60, le=3600)
     metrics_history_retention_hours: int = Field(default=168, ge=1, le=8760)
-    metrics_history_max_rows: int = Field(default=200000, ge=1000, le=20000000)
+    # Zero disables the optional row cap; retention still applies.
+    metrics_history_max_rows: int = Field(default=200000, ge=0)
     alerts_enabled: bool = True
     alert_event_retention_hours: int = Field(default=2160, ge=24, le=17520)
     alert_event_max_rows: int = Field(default=10000, ge=100, le=1000000)

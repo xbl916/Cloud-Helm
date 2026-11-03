@@ -1,9 +1,13 @@
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from cloudhelm.config import Settings
+from cloudhelm.db import engine
 from cloudhelm.models import (
     Container,
     MetricSample,
@@ -28,9 +32,11 @@ def record_metric_history(
 ) -> None:
     if not settings.metrics_history_enabled:
         return
-    if node.metrics_history_at and (
-        now - _aware(node.metrics_history_at)
-    ).total_seconds() < settings.metrics_history_interval_seconds:
+    if (
+        node.metrics_history_at
+        and (now - _aware(node.metrics_history_at)).total_seconds()
+        < settings.metrics_history_interval_seconds
+    ):
         return
 
     node.metrics_history_at = now
@@ -116,21 +122,89 @@ def record_metric_history(
         )
     db.flush()
 
-    retention_cutoff = now - timedelta(hours=settings.metrics_history_retention_hours)
-    db.execute(
-        delete(MetricSample)
-        .where(MetricSample.sampled_at < retention_cutoff)
-        .execution_options(synchronize_session=False)
-    )
-    boundary = db.scalar(
-        select(MetricSample.id)
-        .order_by(MetricSample.id.desc())
-        .offset(settings.metrics_history_max_rows - 1)
-        .limit(1)
-    )
-    if boundary is not None:
-        db.execute(
-            delete(MetricSample)
-            .where(MetricSample.id < boundary)
-            .execution_options(synchronize_session=False)
-        )
+
+@contextmanager
+def _cleanup_session(target_engine: Engine) -> Generator[Session | None, None, None]:
+    """Pin the connection so a PostgreSQL lock spans the batch commits."""
+    with target_engine.connect() as connection:
+        postgres = connection.dialect.name == "postgresql"
+        lock_key = 0x43484D48495354  # CHMHIST; shared by all Server workers.
+        acquired = False
+        try:
+            if postgres:
+                acquired = connection.scalar(select(func.pg_try_advisory_lock(lock_key)))
+                connection.commit()
+                if not acquired:
+                    yield None
+                    return
+            with Session(bind=connection) as db:
+                yield db
+        finally:
+            if acquired:
+                try:
+                    connection.rollback()
+                    connection.execute(select(func.pg_advisory_unlock(lock_key)))
+                    connection.commit()
+                except Exception:
+                    # Never return a connection holding our session lock to the pool.
+                    connection.invalidate()
+                    raise
+
+
+def cleanup_metric_history(
+    settings: Settings,
+    now: datetime,
+    target_engine: Engine = engine,
+    *,
+    batch_size: int = 1000,
+    max_batches: int = 20,
+) -> bool:
+    """Commit bounded deletes; return True when another pass may be needed.
+
+    Time-only retention uses the sampled_at index and never counts the table.
+    A configured row cap counts once per pass, then deletes the excess by PK.
+    Cleanup also runs when sampling is disabled or every node is offline.
+    """
+    if batch_size < 1 or max_batches < 1:
+        raise ValueError("Cleanup batch limits must be positive")
+    cutoff = now - timedelta(hours=settings.metrics_history_retention_hours)
+    with _cleanup_session(target_engine) as db:
+        if db is None:
+            return False
+        batches = 0
+        while batches < max_batches:
+            expired = list(
+                db.scalars(
+                    select(MetricSample.id)
+                    .where(MetricSample.sampled_at < cutoff)
+                    .order_by(MetricSample.sampled_at)
+                    .limit(batch_size)
+                )
+            )
+            if not expired:
+                break
+            db.execute(delete(MetricSample).where(MetricSample.id.in_(expired)))
+            db.commit()
+            batches += 1
+        if batches == max_batches:
+            return True
+        if not settings.metrics_history_max_rows:
+            return False
+
+        total = db.scalar(select(func.count()).select_from(MetricSample)) or 0
+        excess = total - settings.metrics_history_max_rows
+        while excess > 0 and batches < max_batches:
+            oldest = list(
+                db.scalars(
+                    select(MetricSample.id)
+                    .order_by(MetricSample.id)
+                    .limit(min(batch_size, excess))
+                )
+            )
+            if not oldest:
+                break
+            db.execute(delete(MetricSample).where(MetricSample.id.in_(oldest)))
+            db.commit()
+            excess -= len(oldest)
+            batches += 1
+        return excess > 0
